@@ -1,20 +1,33 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap } from 'lucide-react';
 
-const LidarSpoofingSimulator = () => {
-  const canvasRef = useRef(null);
-  const [isRunning, setIsRunning] = useState(false);
-  const [attackType, setAttackType] = useState('none');
-  const [detectionRate, setDetectionRate] = useState(100);
-  const [collisionRisk, setCollisionRisk] = useState(0);
-  const [time, setTime] = useState(0);
-  const animationRef = useRef(null);
+type ObjectType = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  type: string;
+  id: string | number;
+  hidden?: boolean;
+};
 
-  // Simulation state
-  const [carPos, setCarPos] = useState({ x: 100, y: 300 });
-  const [realObjects, setRealObjects] = useState([]);
-  const [spoofedObjects, setSpoofedObjects] = useState([]);
-  const [carSpeed, setCarSpeed] = useState(2);
+const LidarSpoofingSimulator: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationRef = useRef<number | null>(null);
+
+  const [isRunning, setIsRunning] = useState<boolean>(false);
+  const [attackType, setAttackType] = useState<'none' | 'phantom' | 'hiding' | 'relay' | 'saturation'>('none');
+  const [detectionRate, setDetectionRate] = useState<number>(100);
+  const [collisionRisk, setCollisionRisk] = useState<number>(0);
+  const [time, setTime] = useState<number>(0);
+
+  const [carPos, setCarPos] = useState<{ x: number; y: number }>({ x: 100, y: 300 });
+  const [realObjects, setRealObjects] = useState<ObjectType[]>([]);
+  const [spoofedObjects, setSpoofedObjects] = useState<ObjectType[]>([]);
+  const [carSpeed] = useState<number>(2);
+
+
+
 
   useEffect(() => {
     // Initialize real objects
@@ -30,9 +43,7 @@ const LidarSpoofingSimulator = () => {
       animationRef.current = requestAnimationFrame(animate);
     }
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
   }, [isRunning, time, attackType, carPos, realObjects, spoofedObjects]);
 
@@ -41,6 +52,8 @@ const LidarSpoofingSimulator = () => {
     if (!canvas) return;
 
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
     const width = canvas.width;
     const height = canvas.height;
 
@@ -51,7 +64,7 @@ const LidarSpoofingSimulator = () => {
     // Draw road
     ctx.fillStyle = '#2a2a3e';
     ctx.fillRect(0, 250, width, 150);
-    
+
     // Draw lane markings
     ctx.strokeStyle = '#ffff00';
     ctx.lineWidth = 2;
@@ -69,14 +82,10 @@ const LidarSpoofingSimulator = () => {
     drawLidarScans(ctx);
 
     // Draw real objects
-    realObjects.forEach(obj => {
-      drawObject(ctx, obj, '#00ff88', attackType !== 'none');
-    });
+    realObjects.forEach(obj => drawObject(ctx, obj, '#00ff88', attackType !== 'none'));
 
     // Draw spoofed objects
-    spoofedObjects.forEach(obj => {
-      drawObject(ctx, obj, '#ff3366', true, true);
-    });
+    spoofedObjects.forEach(obj => drawObject(ctx, obj, '#ff3366', true));
 
     // Draw autonomous vehicle
     drawCar(ctx);
@@ -89,14 +98,14 @@ const LidarSpoofingSimulator = () => {
 
     // Move car forward
     setCarPos(prev => ({ ...prev, x: prev.x + carSpeed }));
-    
+
     // Reset if car goes off screen
     if (carPos.x > width + 50) {
       setCarPos({ x: -50, y: 300 });
     }
 
     setTime(prev => prev + 1);
-    
+
     if (isRunning) {
       animationRef.current = requestAnimationFrame(animate);
     }
@@ -105,7 +114,6 @@ const LidarSpoofingSimulator = () => {
   const applyAttack = () => {
     switch (attackType) {
       case 'phantom':
-        // Create phantom objects that don't exist
         if (time % 60 === 0) {
           setSpoofedObjects([
             { x: carPos.x + 200, y: 280, width: 40, height: 60, type: 'phantom', id: 'p1' },
@@ -113,19 +121,14 @@ const LidarSpoofingSimulator = () => {
           ]);
         }
         break;
-      
+
       case 'hiding':
-        // Hide real objects by spoofing empty space
         if (time % 5 === 0) {
-          setRealObjects(prev => prev.map(obj => ({
-            ...obj,
-            hidden: Math.abs(obj.x - carPos.x) < 250
-          })));
+          setRealObjects(prev => prev.map(obj => ({ ...obj, hidden: Math.abs(obj.x - carPos.x) < 250 })));
         }
         break;
-      
+
       case 'relay':
-        // Relay attack - move objects to different positions
         if (time % 3 === 0) {
           setSpoofedObjects(realObjects.map(obj => ({
             ...obj,
@@ -136,11 +139,10 @@ const LidarSpoofingSimulator = () => {
           })));
         }
         break;
-      
+
       case 'saturation':
-        // Flood with false positives
         if (time % 20 === 0) {
-          const noise = [];
+          const noise: ObjectType[] = [];
           for (let i = 0; i < 15; i++) {
             noise.push({
               x: carPos.x + 150 + Math.random() * 300,
@@ -154,25 +156,25 @@ const LidarSpoofingSimulator = () => {
           setSpoofedObjects(noise);
         }
         break;
-      
+
       default:
         setSpoofedObjects([]);
         setRealObjects(prev => prev.map(obj => ({ ...obj, hidden: false })));
     }
   };
 
-  const drawLidarScans = (ctx) => {
+  const drawLidarScans = (ctx: CanvasRenderingContext2D) => {
     const scanCount = 16;
     const maxRange = 400;
-    
+
     ctx.save();
     ctx.translate(carPos.x, carPos.y);
-    
+
     for (let i = 0; i < scanCount; i++) {
       const angle = (Math.PI / 2) * (i / scanCount - 0.5);
       const x = Math.cos(angle) * maxRange;
       const y = Math.sin(angle) * maxRange;
-      
+
       ctx.strokeStyle = attackType !== 'none' ? 'rgba(255, 51, 102, 0.2)' : 'rgba(0, 255, 136, 0.2)';
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -180,33 +182,30 @@ const LidarSpoofingSimulator = () => {
       ctx.lineTo(x, y);
       ctx.stroke();
     }
-    
+
     ctx.restore();
   };
 
-  const drawObject = (ctx, obj, color, isUnderAttack, isSpoofed = false) => {
+  const drawObject = (ctx: CanvasRenderingContext2D, obj: ObjectType, color: string, isSpoofed = false) => {
+
     if (obj.hidden) return;
-    
+
     ctx.fillStyle = color;
     ctx.globalAlpha = isSpoofed ? 0.7 : 1;
-    
+
     if (obj.type === 'pedestrian' || obj.type === 'phantom') {
-      // Draw pedestrian
-      ctx.fillRect(obj.x, obj.y + 40, obj.width, 20); // Body
+      ctx.fillRect(obj.x, obj.y + 40, obj.width, 20);
       ctx.beginPath();
-      ctx.arc(obj.x + obj.width/2, obj.y + 20, 15, 0, Math.PI * 2);
-      ctx.fill(); // Head
+      ctx.arc(obj.x + obj.width / 2, obj.y + 20, 15, 0, Math.PI * 2);
+      ctx.fill();
     } else if (obj.type === 'vehicle' || obj.type === 'relayed') {
-      // Draw vehicle
       ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
       ctx.fillStyle = '#ffffff';
-      ctx.fillRect(obj.x + 5, obj.y + 5, 15, 10); // Window
+      ctx.fillRect(obj.x + 5, obj.y + 5, 15, 10);
     } else {
-      // Draw obstacle
       ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
     }
-    
-    // Draw warning indicator if spoofed
+
     if (isSpoofed) {
       ctx.globalAlpha = 1;
       ctx.strokeStyle = '#ff0000';
@@ -215,28 +214,25 @@ const LidarSpoofingSimulator = () => {
       ctx.strokeRect(obj.x - 5, obj.y - 5, obj.width + 10, obj.height + 10);
       ctx.setLineDash([]);
     }
-    
+
     ctx.globalAlpha = 1;
   };
 
-  const drawCar = (ctx) => {
-    // Draw autonomous vehicle
+  const drawCar = (ctx: CanvasRenderingContext2D) => {
     ctx.fillStyle = '#00aaff';
     ctx.fillRect(carPos.x - 25, carPos.y - 15, 50, 30);
-    
-    // Draw LiDAR sensor on top
+
     ctx.fillStyle = '#ffaa00';
     ctx.beginPath();
     ctx.arc(carPos.x, carPos.y - 20, 8, 0, Math.PI * 2);
     ctx.fill();
-    
-    // Draw wheels
+
     ctx.fillStyle = '#333333';
     ctx.fillRect(carPos.x - 20, carPos.y + 15, 10, 5);
     ctx.fillRect(carPos.x + 10, carPos.y + 15, 10, 5);
   };
 
-  const drawDetectionOverlay = (ctx) => {
+  const drawDetectionOverlay = (ctx: CanvasRenderingContext2D) => {
     ctx.font = '12px monospace';
     ctx.fillStyle = attackType !== 'none' ? '#ff3366' : '#00ff88';
     ctx.fillText(`Detection Rate: ${detectionRate.toFixed(0)}%`, 10, 20);
@@ -277,7 +273,8 @@ const LidarSpoofingSimulator = () => {
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-6 bg-gray-900 text-white rounded-lg">
+  
+ <div className="w-full max-w-6xl mx-auto p-6 bg-gray-900 text-white rounded-lg">
       <div className="mb-6">
         <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
           <Shield className="text-blue-400" />
@@ -412,3 +409,5 @@ const LidarSpoofingSimulator = () => {
 };
 
 export default LidarSpoofingSimulator;
+
+

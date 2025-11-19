@@ -1,4 +1,4 @@
-import React from 'react';
+
 import LidarSpoofingSimulator from './lidar_spoof_sim.tsx';
 
 function App() {
