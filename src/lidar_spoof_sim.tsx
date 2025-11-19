@@ -1,413 +1,640 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap } from 'lucide-react';
+import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap, Activity, Terminal, Settings } from 'lucide-react';
 
+// --- Types ---
 type ObjectType = {
   x: number;
   y: number;
   width: number;
   height: number;
-  type: string;
+  type: 'pedestrian' | 'vehicle' | 'obstacle' | 'phantom' | 'noise';
   id: string | number;
   hidden?: boolean;
+  distance?: number;
+};
+
+type LogEntry = {
+  id: number;
+  timestamp: string;
+  message: string;
+  type: 'info' | 'warning' | 'alert';
 };
 
 const LidarSpoofingSimulator: React.FC = () => {
+  // --- Refs & State ---
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
+  const requestRef = useRef<number | null>(null);
+  const scrollOffset = useRef<number>(0);
 
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [attackType, setAttackType] = useState<'none' | 'phantom' | 'hiding' | 'relay' | 'saturation'>('none');
+  
+  // Simulation settings
+  const [simSpeed, setSimSpeed] = useState<number>(4);
+  const [lidarRange, setLidarRange] = useState<number>(350);
+  
+  // Metrics
   const [detectionRate, setDetectionRate] = useState<number>(100);
   const [collisionRisk, setCollisionRisk] = useState<number>(0);
-  const [time, setTime] = useState<number>(0);
+  const [nearestObjectDist, setNearestObjectDist] = useState<number | null>(null);
+  
+  // Logs
+  const [logs, setLogs] = useState<LogEntry[]>([]);
 
-  const [carPos, setCarPos] = useState<{ x: number; y: number }>({ x: 100, y: 300 });
-  const [realObjects, setRealObjects] = useState<ObjectType[]>([]);
-  const [spoofedObjects, setSpoofedObjects] = useState<ObjectType[]>([]);
-  const [carSpeed] = useState<number>(2);
+  // Objects state
+  const [objects, setObjects] = useState<ObjectType[]>([
+    { x: 600, y: 290, width: 60, height: 40, type: 'vehicle', id: 1 },
+    { x: 900, y: 280, width: 30, height: 50, type: 'pedestrian', id: 2 },
+    { x: 1400, y: 310, width: 40, height: 40, type: 'obstacle', id: 3 },
+  ]);
 
+  // Helper: Add log
+  const addLog = (message: string, type: 'info' | 'warning' | 'alert') => {
+    setLogs(prev => {
+      const newLog = {
+        id: Date.now(),
+        timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        message,
+        type
+      };
+      return [newLog, ...prev].slice(0, 6); // Keep last 6 logs
+    });
+  };
 
-
-
+  // --- Attack Logic ---
   useEffect(() => {
-    // Initialize real objects
-    setRealObjects([
-      { x: 400, y: 280, width: 40, height: 60, type: 'pedestrian', id: 1 },
-      { x: 600, y: 290, width: 50, height: 50, type: 'vehicle', id: 2 },
-      { x: 300, y: 320, width: 30, height: 30, type: 'obstacle', id: 3 }
-    ]);
-  }, []);
-
-  useEffect(() => {
-    if (isRunning) {
-      animationRef.current = requestAnimationFrame(animate);
+    // Reset objects when attack changes to prevent stuck states
+    if (attackType === 'none') {
+        setObjects(prev => prev.filter(o => o.type !== 'phantom' && o.type !== 'noise').map(o => ({...o, hidden: false})));
+        addLog("System normalized. Attack countermeasures engaged.", "info");
+    } else {
+        addLog(`WARNING: ${attackType.toUpperCase()} attack signature detected.`, "alert");
     }
-    return () => {
-      if (animationRef.current) cancelAnimationFrame(animationRef.current);
-    };
-  }, [isRunning, time, attackType, carPos, realObjects, spoofedObjects]);
+  }, [attackType]);
 
-  const animate = () => {
+  // --- Animation Loop ---
+  const animate = (time: number) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const width = canvas.width;
     const height = canvas.height;
 
-    // Clear canvas
-    ctx.fillStyle = '#1a1a2e';
+    // 1. Update World State (Scrolling)
+    scrollOffset.current = (scrollOffset.current + simSpeed) % 100; // Parallax factor
+
+    // Update Objects (Move them left to simulate car moving right)
+    setObjects(prevObjects => {
+      let nextObjects = prevObjects.map(obj => ({
+        ...obj,
+        x: obj.x - simSpeed
+      }));
+
+      // Respawn objects that go off screen left
+      nextObjects.forEach(obj => {
+        if (obj.x + obj.width < 0) {
+          obj.x = width + 200 + Math.random() * 500; // Respawn far right
+          obj.hidden = false; // Unhide on respawn
+        }
+      });
+
+      // --- Apply Active Attacks Frame-by-Frame ---
+      
+      // Saturation (Noise)
+      if (attackType === 'saturation') {
+        // Remove old noise
+        nextObjects = nextObjects.filter(o => o.type !== 'noise');
+        // Add new random noise
+        if (Math.random() > 0.8) {
+             nextObjects.push({
+                x: 150 + Math.random() * 300,
+                y: 250 + Math.random() * 150,
+                width: 5, height: 5, type: 'noise', id: Math.random()
+             });
+        }
+      }
+
+      // Phantom Injection
+      if (attackType === 'phantom') {
+        const hasPhantom = nextObjects.some(o => o.type === 'phantom');
+        if (!hasPhantom && Math.random() > 0.98) {
+            nextObjects.push({
+                x: 300, y: 300, width: 40, height: 40, type: 'phantom', id: 'phantom'
+            });
+        }
+      }
+
+      // Hiding Attack
+      if (attackType === 'hiding') {
+         nextObjects = nextObjects.map(obj => ({
+             ...obj,
+             hidden: (obj.type !== 'phantom' && obj.x > 150 && obj.x < 400) // Hide objects in "kill zone"
+         }));
+      }
+
+      // Relay Attack (Offsetting)
+      if (attackType === 'relay') {
+          // Visually, we might draw them offset, but logically the car is confused.
+          // For this sim, we will handle the visual offset in the draw function.
+      }
+
+      return nextObjects;
+    });
+
+    // 2. Drawing 
+    // Clear
+    ctx.fillStyle = '#0f172a'; // Darker Slate
     ctx.fillRect(0, 0, width, height);
 
-    // Draw road
-    ctx.fillStyle = '#2a2a3e';
-    ctx.fillRect(0, 250, width, 150);
+    // Grid / Floor
+    drawGrid(ctx, width, height);
 
-    // Draw lane markings
-    ctx.strokeStyle = '#ffff00';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([20, 15]);
-    ctx.beginPath();
-    ctx.moveTo(0, 325);
-    ctx.lineTo(width, 325);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    // Update and apply attack
-    applyAttack();
-
-    // Draw LiDAR scan lines
-    drawLidarScans(ctx);
-
-    // Draw real objects
-    realObjects.forEach(obj => drawObject(ctx, obj, '#00ff88', attackType !== 'none'));
-
-    // Draw spoofed objects
-    spoofedObjects.forEach(obj => drawObject(ctx, obj, '#ff3366', true));
-
-    // Draw autonomous vehicle
+    // Car
     drawCar(ctx);
 
-    // Draw detection overlay
-    drawDetectionOverlay(ctx);
+    // Objects
+    objects.forEach(obj => {
+        // Relay attack visual shift
+        let drawX = obj.x;
+        let drawY = obj.y;
+        
+        if (attackType === 'relay' && obj.type !== 'phantom' && obj.type !== 'noise') {
+            drawX += 80; // Shift apparent position
+            ctx.globalAlpha = 0.5; // Real object is "faded" to sensor
+        }
+        
+        drawObject(ctx, {...obj, x: drawX, y: drawY});
+        ctx.globalAlpha = 1.0;
+    });
 
-    // Update metrics
-    updateMetrics();
-
-    // Move car forward
-    setCarPos(prev => ({ ...prev, x: prev.x + carSpeed }));
-
-    // Reset if car goes off screen
-    if (carPos.x > width + 50) {
-      setCarPos({ x: -50, y: 300 });
+    // LiDAR Rays & Points
+    const metrics = calculateLidar(ctx, objects);
+    setNearestObjectDist(metrics.minDist);
+    
+    // 3. Update React Metrics State (Throttled slightly visually, but calc is realtime)
+    if (Math.floor(time) % 10 === 0) {
+        calculateRiskMetrics(metrics.minDist);
     }
 
-    setTime(prev => prev + 1);
-
-    if (isRunning) {
-      animationRef.current = requestAnimationFrame(animate);
-    }
+    requestRef.current = requestAnimationFrame(animate);
   };
 
-  const applyAttack = () => {
-    switch (attackType) {
-      case 'phantom':
-        if (time % 60 === 0) {
-          setSpoofedObjects([
-            { x: carPos.x + 200, y: 280, width: 40, height: 60, type: 'phantom', id: 'p1' },
-            { x: carPos.x + 350, y: 300, width: 50, height: 50, type: 'phantom', id: 'p2' }
-          ]);
-        }
-        break;
+  // --- Helper Drawing Functions ---
 
-      case 'hiding':
-        if (time % 5 === 0) {
-          setRealObjects(prev => prev.map(obj => ({ ...obj, hidden: Math.abs(obj.x - carPos.x) < 250 })));
-        }
-        break;
+  const drawGrid = (ctx: CanvasRenderingContext2D, w: number, offset: number) => {
+    // Road
+    const roadTop = 250;
+    const roadBot = 400;
+    
+    // Gradient Road
+    const grad = ctx.createLinearGradient(0, roadTop, 0, roadBot);
+    grad.addColorStop(0, '#1e293b');
+    grad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, roadTop, w, roadBot - roadTop);
 
-      case 'relay':
-        if (time % 3 === 0) {
-          setSpoofedObjects(realObjects.map(obj => ({
-            ...obj,
-            x: obj.x + 100,
-            y: obj.y - 50,
-            type: 'relayed',
-            id: `relay_${obj.id}`
-          })));
-        }
-        break;
+    // Perspective Lines
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 250); ctx.lineTo(w, 250);
+    ctx.moveTo(0, 400); ctx.lineTo(w, 400);
+    ctx.stroke();
 
-      case 'saturation':
-        if (time % 20 === 0) {
-          const noise: ObjectType[] = [];
-          for (let i = 0; i < 15; i++) {
-            noise.push({
-              x: carPos.x + 150 + Math.random() * 300,
-              y: 260 + Math.random() * 120,
-              width: 20,
-              height: 20,
-              type: 'noise',
-              id: `noise_${i}`
-            });
-          }
-          setSpoofedObjects(noise);
-        }
-        break;
-
-      default:
-        setSpoofedObjects([]);
-        setRealObjects(prev => prev.map(obj => ({ ...obj, hidden: false })));
-    }
-  };
-
-  const drawLidarScans = (ctx: CanvasRenderingContext2D) => {
-    const scanCount = 16;
-    const maxRange = 400;
-
-    ctx.save();
-    ctx.translate(carPos.x, carPos.y);
-
-    for (let i = 0; i < scanCount; i++) {
-      const angle = (Math.PI / 2) * (i / scanCount - 0.5);
-      const x = Math.cos(angle) * maxRange;
-      const y = Math.sin(angle) * maxRange;
-
-      ctx.strokeStyle = attackType !== 'none' ? 'rgba(255, 51, 102, 0.2)' : 'rgba(0, 255, 136, 0.2)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-
-    ctx.restore();
-  };
-
-  const drawObject = (ctx: CanvasRenderingContext2D, obj: ObjectType, color: string, isSpoofed = false) => {
-
-    if (obj.hidden) return;
-
-    ctx.fillStyle = color;
-    ctx.globalAlpha = isSpoofed ? 0.7 : 1;
-
-    if (obj.type === 'pedestrian' || obj.type === 'phantom') {
-      ctx.fillRect(obj.x, obj.y + 40, obj.width, 20);
-      ctx.beginPath();
-      ctx.arc(obj.x + obj.width / 2, obj.y + 20, 15, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (obj.type === 'vehicle' || obj.type === 'relayed') {
-      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(obj.x + 5, obj.y + 5, 15, 10);
-    } else {
-      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-    }
-
-    if (isSpoofed) {
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      ctx.strokeRect(obj.x - 5, obj.y - 5, obj.width + 10, obj.height + 10);
-      ctx.setLineDash([]);
-    }
-
-    ctx.globalAlpha = 1;
+    // Moving Lane Markers
+    ctx.strokeStyle = '#fbbf24'; // Amber
+    ctx.lineWidth = 3;
+    ctx.setLineDash([30, 30]);
+    ctx.lineDashOffset = -offset; // Makes it move
+    ctx.beginPath();
+    ctx.moveTo(0, 325);
+    ctx.lineTo(w, 325);
+    ctx.stroke();
+    ctx.setLineDash([]);
   };
 
   const drawCar = (ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = '#00aaff';
-    ctx.fillRect(carPos.x - 25, carPos.y - 15, 50, 30);
-
-    ctx.fillStyle = '#ffaa00';
+    const x = 100;
+    const y = 300;
+    
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.beginPath();
-    ctx.arc(carPos.x, carPos.y - 20, 8, 0, Math.PI * 2);
+    ctx.ellipse(x, y + 25, 40, 10, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(carPos.x - 20, carPos.y + 15, 10, 5);
-    ctx.fillRect(carPos.x + 10, carPos.y + 15, 10, 5);
+    // Body
+    ctx.fillStyle = '#3b82f6'; // Blue 500
+    ctx.beginPath();
+    ctx.roundRect(x - 40, y - 20, 80, 40, 5);
+    ctx.fill();
+    
+    // Roof/Sensor mount
+    ctx.fillStyle = '#1e3a8a';
+    ctx.fillRect(x - 15, y - 25, 30, 20);
+
+    // Rotating LiDAR Sensor
+    const time = Date.now() / 100;
+    ctx.save();
+    ctx.translate(x, y - 25);
+    ctx.rotate(time);
+    ctx.fillStyle = '#ef4444';
+    ctx.fillRect(-10, -2, 20, 4);
+    ctx.restore();
   };
 
-  const drawDetectionOverlay = (ctx: CanvasRenderingContext2D) => {
-    ctx.font = '12px monospace';
-    ctx.fillStyle = attackType !== 'none' ? '#ff3366' : '#00ff88';
-    ctx.fillText(`Detection Rate: ${detectionRate.toFixed(0)}%`, 10, 20);
-    ctx.fillText(`Collision Risk: ${collisionRisk.toFixed(0)}%`, 10, 40);
-    ctx.fillText(`Attack: ${attackType === 'none' ? 'None' : attackType.toUpperCase()}`, 10, 60);
-  };
+  const drawObject = (ctx: CanvasRenderingContext2D, obj: ObjectType) => {
+    if (obj.hidden) return;
 
-  const updateMetrics = () => {
-    switch (attackType) {
-      case 'phantom':
-        setDetectionRate(45 + Math.random() * 15);
-        setCollisionRisk(65 + Math.random() * 20);
-        break;
-      case 'hiding':
-        setDetectionRate(30 + Math.random() * 20);
-        setCollisionRisk(85 + Math.random() * 10);
-        break;
-      case 'relay':
-        setDetectionRate(55 + Math.random() * 15);
-        setCollisionRisk(70 + Math.random() * 15);
-        break;
-      case 'saturation':
-        setDetectionRate(25 + Math.random() * 15);
-        setCollisionRisk(60 + Math.random() * 20);
-        break;
-      default:
-        setDetectionRate(95 + Math.random() * 5);
-        setCollisionRisk(5 + Math.random() * 5);
+    const isPhantom = obj.type === 'phantom';
+    const isNoise = obj.type === 'noise';
+
+    ctx.save();
+    if (isPhantom) {
+        ctx.strokeStyle = '#f472b6'; // Pink
+        ctx.setLineDash([2, 2]);
+        ctx.fillStyle = 'rgba(244, 114, 182, 0.2)';
+    } else if (isNoise) {
+        ctx.fillStyle = '#94a3b8';
+    } else {
+        ctx.fillStyle = obj.type === 'pedestrian' ? '#22c55e' : '#a855f7'; // Green or Purple
     }
+
+    // Draw simple shape
+    if (isNoise) {
+        ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+    } else {
+        ctx.beginPath();
+        ctx.roundRect(obj.x, obj.y, obj.width, obj.height, 4);
+        ctx.fill();
+        if (isPhantom) ctx.stroke();
+        
+        // ID Label
+        if (!isNoise) {
+            ctx.fillStyle = '#fff';
+            ctx.font = '10px monospace';
+            ctx.fillText(obj.type.toUpperCase(), obj.x, obj.y - 5);
+        }
+    }
+    ctx.restore();
   };
+
+  // Raycasting simulation for LiDAR Visualization
+  const calculateLidar = (ctx: CanvasRenderingContext2D, currentObjects: ObjectType[]) => {
+    const sensorX = 100;
+    const sensorY = 275;
+    const numRays = 40; // Density of scan
+    const fov = Math.PI / 3; // 60 degrees
+    let minDist = 9999;
+
+    ctx.save();
+    
+    // We sweep an arc in front of the car
+    for (let i = 0; i < numRays; i++) {
+      const angle = -fov/2 + (fov * i / numRays);
+      
+      // Calculate ray end point (max range)
+      const endX = sensorX + Math.cos(angle) * lidarRange;
+      const endY = sensorY + Math.sin(angle) * lidarRange;
+
+      let hit = false;
+      let hitX = endX;
+      let hitY = endY;
+      let detectedType = '';
+
+      // Simple check against all objects (Bounding Box check)
+      for (const obj of currentObjects) {
+        if (obj.hidden) continue; // LiDAR passes through hidden objects
+
+        // Check if ray intersects object box (Simplified logic for visual demo)
+        // We check if the "end" of the ray is inside or past the object's left face
+        // This is a "fake" raycast that assumes objects are somewhat perpendicular to camera
+        
+        const inYRange = (endY > obj.y && endY < obj.y + obj.height);
+        
+        if (inYRange && endX > obj.x && endX < obj.x + obj.width + 50) {
+           // Hit detected!
+           hit = true;
+           // Cap the ray at the object face
+           hitX = Math.max(sensorX, obj.x); 
+           hitY = sensorY + Math.tan(angle) * (hitX - sensorX);
+           
+           detectedType = obj.type;
+           
+           const d = Math.sqrt(Math.pow(hitX - sensorX, 2) + Math.pow(hitY - sensorY, 2));
+           if (d < minDist) minDist = d;
+           break; 
+        }
+      }
+
+      // Draw Ray
+      ctx.beginPath();
+      ctx.moveTo(sensorX, sensorY);
+      ctx.lineTo(hitX, hitY);
+      
+      // Style based on hit or miss
+      if (hit) {
+          // Object detected color
+          ctx.strokeStyle = detectedType === 'phantom' ? '#f472b6' : '#34d399'; 
+          ctx.globalAlpha = 0.6;
+          ctx.stroke();
+          
+          // Draw "Point Cloud" dot
+          ctx.beginPath();
+          ctx.arc(hitX, hitY, 2, 0, Math.PI * 2);
+          ctx.fillStyle = '#fff';
+          ctx.globalAlpha = 1;
+          ctx.fill();
+      } else {
+          // Empty space
+          ctx.strokeStyle = '#334155'; // Faint grid line
+          ctx.globalAlpha = 0.2;
+          ctx.stroke();
+      }
+    }
+    
+    ctx.restore();
+    return { minDist: minDist === 9999 ? null : minDist };
+  };
+
+  const calculateRiskMetrics = (dist: number | null) => {
+      // 1. Base Calculation
+      let risk = 0;
+      let detection = 100;
+
+      if (dist !== null) {
+          if (dist < 100) risk = 90;
+          else if (dist < 200) risk = 40;
+          else risk = 10;
+      }
+
+      // 2. Attack Modifiers
+      switch (attackType) {
+          case 'hiding':
+            // In hiding, we don't see the object, so detection is low, but ACTUAL risk is high
+            // Since "dist" comes from the visual lidar, it will be null if hidden.
+            if (dist === null) {
+                // We are blind to the danger
+                detection = 0; 
+                // In a real sim we'd check the 'true' object position. 
+                // We'll simulate high true risk if there are objects nearby we can't see.
+                const realDanger = objects.some(o => o.x > 100 && o.x < 400);
+                if (realDanger) risk = 95; 
+            }
+            break;
+          case 'phantom':
+             // We see a ghost. Detection is "working" (seeing the ghost), but it's a False Positive.
+             if (dist !== null && dist < 150) {
+                 risk = 80; // Hard braking risk
+                 detection = 50; // Confused
+             }
+             break;
+          case 'saturation':
+             detection = 15; // Blinded
+             risk = 60; // Unsafe state
+             break;
+          case 'relay':
+             detection = 60; // Inaccurate
+             risk = 75; // Miscalculated braking distance
+             break;
+      }
+
+      setDetectionRate(prev => prev + (detection - prev) * 0.1); // Smooth transition
+      setCollisionRisk(prev => prev + (risk - prev) * 0.1);
+  };
+
+  // --- Lifecycle ---
+  useEffect(() => {
+    if (isRunning) {
+      requestRef.current = requestAnimationFrame(animate);
+    }
+    return () => {
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    };
+  }, [isRunning, objects, attackType, simSpeed, lidarRange]);
 
   const reset = () => {
     setIsRunning(false);
-    setCarPos({ x: 100, y: 300 });
-    setTime(0);
-    setSpoofedObjects([]);
+    setObjects([
+        { x: 600, y: 290, width: 60, height: 40, type: 'vehicle', id: 1 },
+        { x: 900, y: 280, width: 30, height: 50, type: 'pedestrian', id: 2 },
+    ]);
     setAttackType('none');
+    setLogs([]);
+    addLog("Simulation reset.", "info");
   };
 
   return (
-  
- <div className="w-full max-w-6xl mx-auto p-6 bg-gray-900 text-white rounded-lg">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-          <Shield className="text-blue-400" />
-          LiDAR Spoofing Attack Simulator
-        </h1>
-        <p className="text-gray-400">
-          Educational demonstration of vulnerabilities in autonomous vehicle LiDAR systems
-        </p>
-      </div>
-
-      <div className="mb-4">
-        <canvas
-          ref={canvasRef}
-          width={800}
-          height={400}
-          className="w-full border-2 border-gray-700 rounded"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <div className="bg-gray-800 p-4 rounded">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Zap className="text-yellow-400" size={20} />
-            Attack Controls
-          </h3>
-          <div className="space-y-2">
-            <button
-              onClick={() => setAttackType('phantom')}
-              className={`w-full p-2 rounded ${attackType === 'phantom' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
-            >
-              Phantom Object Injection
-            </button>
-            <button
-              onClick={() => setAttackType('hiding')}
-              className={`w-full p-2 rounded ${attackType === 'hiding' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
-            >
-              Object Hiding Attack
-            </button>
-            <button
-              onClick={() => setAttackType('relay')}
-              className={`w-full p-2 rounded ${attackType === 'relay' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
-            >
-              Relay/Displacement Attack
-            </button>
-            <button
-              onClick={() => setAttackType('saturation')}
-              className={`w-full p-2 rounded ${attackType === 'saturation' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
-            >
-              Saturation/Noise Attack
-            </button>
-            <button
-              onClick={() => setAttackType('none')}
-              className={`w-full p-2 rounded ${attackType === 'none' ? 'bg-green-600' : 'bg-gray-700'} hover:bg-green-500 transition`}
-            >
-              No Attack (Normal Operation)
-            </button>
-          </div>
+    <div className="w-full max-w-7xl mx-auto p-6 bg-slate-950 text-slate-200 rounded-xl border border-slate-800 shadow-2xl font-sans">
+      
+      {/* Header */}
+      <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
+        <div>
+            <h1 className="text-3xl font-bold flex items-center gap-3 text-white">
+            <Shield className="text-blue-500" size={32} />
+            LiDAR Defense Simulator <span className="text-xs bg-blue-900 text-blue-300 px-2 py-1 rounded">v2.0</span>
+            </h1>
+            <p className="text-slate-500 text-sm mt-1">Autonomous Perception Vulnerability Analysis Workbench</p>
         </div>
+        <div className="flex gap-3">
+             <button
+                onClick={() => setIsRunning(!isRunning)}
+                className={`flex items-center gap-2 px-6 py-2 rounded-lg font-bold transition-all ${
+                    isRunning 
+                    ? 'bg-amber-600 hover:bg-amber-700 text-white shadow-[0_0_15px_rgba(217,119,6,0.4)]' 
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-[0_0_15px_rgba(5,150,105,0.4)]'
+                }`}
+                >
+                {isRunning ? <Pause size={20} /> : <Play size={20} />}
+                {isRunning ? 'FREEZE SIM' : 'RUN SIM'}
+            </button>
+            <button
+                onClick={reset}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition"
+            >
+                <RotateCcw size={20} />
+            </button>
+        </div>
+      </div>
 
-        <div className="bg-gray-800 p-4 rounded">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle className="text-orange-400" size={20} />
-            Vulnerability Analysis
-          </h3>
-          <div className="space-y-3 text-sm">
-            <div>
-              <div className="flex justify-between mb-1">
-                <span>Detection Rate</span>
-                <span className={detectionRate < 60 ? 'text-red-400' : 'text-green-400'}>
-                  {detectionRate.toFixed(0)}%
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full ${detectionRate < 60 ? 'bg-red-500' : 'bg-green-500'}`}
-                  style={{ width: `${detectionRate}%` }}
-                />
-              </div>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* Left Col: Controls */}
+        <div className="space-y-6">
+            
+            {/* Attack Panel */}
+            <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg">
+                <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-red-400">
+                    <Zap size={20} /> Threat Injection
+                </h3>
+                <div className="grid grid-cols-1 gap-2">
+                    {[
+                        { id: 'none', label: 'No Attack', desc: 'Normal Operation' },
+                        { id: 'phantom', label: 'Phantom Object', desc: 'Injects False Positives' },
+                        { id: 'hiding', label: 'Cloaking / Hiding', desc: 'Masks Real Objects' },
+                        { id: 'relay', label: 'Relay / Spoof', desc: 'Offsets Position' },
+                        { id: 'saturation', label: 'Sensor Saturation', desc: 'High Noise Floor' },
+                    ].map((attack) => (
+                        <button
+                            key={attack.id}
+                            onClick={() => setAttackType(attack.id as any)}
+                            className={`text-left p-3 rounded-lg border transition-all flex flex-col ${
+                                attackType === attack.id 
+                                ? 'bg-red-900/30 border-red-500 text-red-100' 
+                                : 'bg-slate-800/50 border-transparent hover:bg-slate-800 text-slate-400'
+                            }`}
+                        >
+                            <span className="font-bold text-sm">{attack.label}</span>
+                            <span className="text-xs opacity-70">{attack.desc}</span>
+                        </button>
+                    ))}
+                </div>
             </div>
-            <div>
-              <div className="flex justify-between mb-1">
-                <span>Collision Risk</span>
-                <span className={collisionRisk > 50 ? 'text-red-400' : 'text-green-400'}>
-                  {collisionRisk.toFixed(0)}%
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full ${collisionRisk > 50 ? 'bg-red-500' : 'bg-green-500'}`}
-                  style={{ width: `${collisionRisk}%` }}
-                />
-              </div>
+
+            {/* Params Panel */}
+            <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg">
+                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-blue-400">
+                    <Settings size={20} /> Sensor Parameters
+                </h3>
+                <div className="space-y-4">
+                    <div>
+                        <div className="flex justify-between text-xs mb-1 text-slate-400">
+                            <span>Vehicle Speed</span>
+                            <span>{simSpeed} m/s</span>
+                        </div>
+                        <input 
+                            type="range" min="0" max="10" step="0.1" 
+                            value={simSpeed} 
+                            onChange={(e) => setSimSpeed(parseFloat(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                    </div>
+                    <div>
+                        <div className="flex justify-between text-xs mb-1 text-slate-400">
+                            <span>LiDAR Effective Range</span>
+                            <span>{lidarRange} px</span>
+                        </div>
+                        <input 
+                            type="range" min="100" max="600" 
+                            value={lidarRange} 
+                            onChange={(e) => setLidarRange(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                    </div>
+                </div>
             </div>
-          </div>
         </div>
-      </div>
 
-      <div className="flex gap-2 mb-4">
-        <button
-          onClick={() => setIsRunning(!isRunning)}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded transition"
-        >
-          {isRunning ? <Pause size={20} /> : <Play size={20} />}
-          {isRunning ? 'Pause' : 'Start'}
-        </button>
-        <button
-          onClick={reset}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded transition"
-        >
-          <RotateCcw size={20} />
-          Reset
-        </button>
-      </div>
+        {/* Center Col: Visualization */}
+        <div className="lg:col-span-2 space-y-6">
+            
+            {/* Main Canvas Container */}
+            <div className="relative bg-black rounded-xl overflow-hidden border-2 border-slate-700 shadow-2xl">
+                {/* Overlay UI */}
+                <div className="absolute top-4 left-4 flex gap-4 pointer-events-none">
+                    <div className="bg-black/60 backdrop-blur px-3 py-1 rounded border border-slate-600 text-xs text-slate-300 font-mono">
+                        LIDAR_FREQ: 10Hz
+                    </div>
+                    <div className="bg-black/60 backdrop-blur px-3 py-1 rounded border border-slate-600 text-xs text-slate-300 font-mono">
+                        POINTS: {objects.length * 42}
+                    </div>
+                </div>
 
-      <div className="bg-gray-800 p-4 rounded">
-        <h3 className="text-lg font-semibold mb-3">Attack Descriptions</h3>
-        <div className="space-y-2 text-sm text-gray-300">
-          <p><strong className="text-red-400">Phantom Object Injection:</strong> Attacker injects false LiDAR returns, making the vehicle detect non-existent obstacles causing unnecessary braking or evasive maneuvers.</p>
-          <p><strong className="text-red-400">Object Hiding:</strong> Real objects are masked by spoofed empty space signals, preventing the vehicle from detecting actual pedestrians or obstacles.</p>
-          <p><strong className="text-red-400">Relay Attack:</strong> LiDAR returns are captured and retransmitted with modified positions, causing mislocalization of real objects.</p>
-          <p><strong className="text-red-400">Saturation Attack:</strong> System is flooded with noise and false positives, overwhelming the perception algorithms and degrading decision-making.</p>
+                <canvas
+                    ref={canvasRef}
+                    width={800}
+                    height={450}
+                    className="w-full h-auto block bg-[#0f172a]"
+                />
+                
+                {/* Attack Warning Banner */}
+                {attackType !== 'none' && (
+                    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-red-500/90 text-white px-6 py-2 rounded-full font-bold animate-pulse flex items-center gap-2 shadow-[0_0_20px_rgba(239,68,68,0.6)]">
+                        <AlertTriangle size={18} />
+                        SENSOR INTEGRITY COMPROMISED: {attackType.toUpperCase()}
+                    </div>
+                )}
+            </div>
+
+            {/* Metrics Dashboard */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Live Data Feed */}
+                <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 h-48 overflow-hidden flex flex-col">
+                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <Terminal size={14} /> System Log
+                    </h3>
+                    <div className="flex-1 overflow-y-auto font-mono text-xs space-y-2 pr-2">
+                        {logs.length === 0 && <span className="text-slate-600 italic">System waiting...</span>}
+                        {logs.map((log) => (
+                            <div key={log.id} className="flex gap-2 border-l-2 border-slate-700 pl-2">
+                                <span className="text-slate-500">[{log.timestamp}]</span>
+                                <span className={`${
+                                    log.type === 'alert' ? 'text-red-400' : 
+                                    log.type === 'warning' ? 'text-amber-400' : 'text-blue-300'
+                                }`}>
+                                    {log.message}
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* Graphs/Gauges */}
+                <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 flex flex-col justify-between">
+                     <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-2">
+                        <Activity size={14} /> Real-time Analytics
+                    </h3>
+                    
+                    <div className="space-y-4">
+                         {/* Detection Confidence */}
+                         <div>
+                            <div className="flex justify-between text-sm font-medium mb-1">
+                                <span className="text-slate-400">Detection Confidence</span>
+                                <span className={`${detectionRate < 50 ? 'text-red-400' : 'text-emerald-400'}`}>
+                                    {detectionRate.toFixed(1)}%
+                                </span>
+                            </div>
+                            <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                                <div 
+                                    className={`h-full transition-all duration-300 ${detectionRate < 50 ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                    style={{ width: `${detectionRate}%` }} 
+                                />
+                            </div>
+                         </div>
+
+                         {/* Collision Risk */}
+                         <div>
+                            <div className="flex justify-between text-sm font-medium mb-1">
+                                <span className="text-slate-400">Collision Probability</span>
+                                <span className={`${collisionRisk > 70 ? 'text-red-400' : 'text-blue-400'}`}>
+                                    {collisionRisk.toFixed(1)}%
+                                </span>
+                            </div>
+                            <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                                <div 
+                                    className={`h-full transition-all duration-300 ${collisionRisk > 70 ? 'bg-red-500' : 'bg-blue-500'}`}
+                                    style={{ width: `${collisionRisk}%` }} 
+                                />
+                            </div>
+                         </div>
+
+                         {/* Distance Readout */}
+                         <div className="flex justify-between items-end pt-2 border-t border-slate-800">
+                             <span className="text-xs text-slate-500">NEAREST OBJECT</span>
+                             <span className="text-2xl font-mono text-white">
+                                 {nearestObjectDist ? nearestObjectDist.toFixed(1) : '---'} <span className="text-sm text-slate-500">m</span>
+                             </span>
+                         </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
-      </div>
-
-      <div className="mt-4 p-4 bg-yellow-900/30 border border-yellow-600 rounded">
-        <p className="text-yellow-200 text-sm">
-          <strong>Educational Purpose:</strong> This simulation demonstrates known vulnerabilities in autonomous vehicle systems for research and awareness. Real systems employ countermeasures including sensor fusion, signal authentication, and anomaly detection.
-        </p>
       </div>
     </div>
   );
 };
 
 export default LidarSpoofingSimulator;
-
-
