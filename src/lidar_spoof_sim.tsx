@@ -39,6 +39,11 @@ const LidarSpoofingSimulator: React.FC = () => {
   const [simSpeed, setSimSpeed] = useState<number>(4);
   const [lidarRange, setLidarRange] = useState<number>(400);
   
+  // Car behavior state (Restored from first snippet)
+  const [carBraking, setCarBraking] = useState<boolean>(false);
+  const [carSpeed, setCarSpeed] = useState<number>(simSpeed);
+  const [emergencyStop, setEmergencyStop] = useState<boolean>(false);
+  
   // Metrics
   const [collisionRisk, setCollisionRisk] = useState<number>(0);
   const [integrityScore, setIntegrityScore] = useState<number>(100);
@@ -51,6 +56,13 @@ const LidarSpoofingSimulator: React.FC = () => {
     { x: 600, y: 280, width: 80, height: 50, type: 'vehicle', id: 1 },
     { x: 900, y: 300, width: 30, height: 60, type: 'pedestrian', id: 2 },
   ]);
+
+  // Sync simSpeed to carSpeed when sliding, unless under attack
+  useEffect(() => {
+    if (attackType === 'none' || vsocActive) {
+        setCarSpeed(simSpeed);
+    }
+  }, [simSpeed, attackType, vsocActive]);
 
   // Helper: Add log
   const addLog = (message: string, type: 'info' | 'warning' | 'alert' | 'success') => {
@@ -119,13 +131,14 @@ const LidarSpoofingSimulator: React.FC = () => {
 
     // 1. Update World State (Only if Running)
     if (isRunning) {
-        scrollOffset.current = (scrollOffset.current + simSpeed) % 50; 
+        // Use carSpeed for scrolling to simulate braking visually
+        scrollOffset.current = (scrollOffset.current + carSpeed) % 50; 
 
         setObjects(prevObjects => {
         // Move objects (Shift Left to simulate car moving Right)
         let nextObjects: ObjectType[] = prevObjects.map(obj => ({
             ...obj,
-            x: obj.x - simSpeed,
+            x: obj.x - carSpeed,
             flagged: false, 
             correctedX: undefined 
         }));
@@ -143,8 +156,8 @@ const LidarSpoofingSimulator: React.FC = () => {
         // 1. Saturation (Noise)
         if (attackType === 'saturation') {
             nextObjects = nextObjects.filter(o => o.type !== 'noise');
-            // Add dynamic noise based on speed
-            const noiseCount = 15;
+            // Add dynamic noise
+            const noiseCount = vsocActive ? 15 : 40;
             for(let i=0; i<noiseCount; i++) {
                 nextObjects.push({
                     x: Math.random() * width,
@@ -152,6 +165,15 @@ const LidarSpoofingSimulator: React.FC = () => {
                     width: 3, height: 3, type: 'noise', id: `n-${Math.random()}`,
                     flagged: vsocActive 
                 });
+            }
+            
+            // Without VSOC: Car slows down due to sensor confusion
+            if (!vsocActive) {
+                setCarSpeed(prev => Math.max(1, prev * 0.95));
+                setCarBraking(true);
+            } else {
+                setCarSpeed(simSpeed);
+                setCarBraking(false);
             }
         }
 
@@ -165,6 +187,20 @@ const LidarSpoofingSimulator: React.FC = () => {
                     flagged: vsocActive 
                 });
             }
+            
+            // Without VSOC: Car emergency brakes for phantom object
+            if (!vsocActive) {
+                const phantom = nextObjects.find(o => o.type === 'phantom');
+                if (phantom && phantom.x < 400) {
+                    setEmergencyStop(true);
+                    setCarSpeed(0);
+                    setCarBraking(true);
+                }
+            } else {
+                setEmergencyStop(false);
+                setCarSpeed(simSpeed);
+                setCarBraking(false);
+            }
         }
 
         // 3. Hiding Attack (Cloaking)
@@ -173,9 +209,15 @@ const LidarSpoofingSimulator: React.FC = () => {
                 const inKillZone = obj.x > 200 && obj.x < 500;
                 return {
                     ...obj,
-                    hidden: obj.type !== 'phantom' && obj.type !== 'noise' && inKillZone
+                    hidden: obj.type !== 'phantom' && obj.type !== 'noise' && inKillZone && !vsocActive
                 };
             });
+            
+            // Without VSOC: Car continues at normal speed, unaware of hidden obstacles
+            if (!vsocActive) {
+                setCarSpeed(simSpeed);
+                setCarBraking(false);
+            }
         }
 
         // 4. Relay (Position Offset)
@@ -186,6 +228,30 @@ const LidarSpoofingSimulator: React.FC = () => {
                 }
                 return obj;
             });
+            
+            // Without VSOC: Car misjudges distances, brakes at wrong times
+            if (!vsocActive) {
+                const anyObjectNearFakePosition = nextObjects.some(o => 
+                    o.type !== 'phantom' && o.type !== 'noise' && (o.x - 150) < 300
+                );
+                if (anyObjectNearFakePosition) {
+                    setCarSpeed(prev => Math.max(2, prev * 0.98));
+                    setCarBraking(true);
+                } else {
+                    setCarSpeed(simSpeed);
+                    setCarBraking(false);
+                }
+            } else {
+                setCarSpeed(simSpeed);
+                setCarBraking(false);
+            }
+        }
+
+        // Reset car behavior for normal mode
+        if (attackType === 'none') {
+            setCarSpeed(simSpeed);
+            setCarBraking(false);
+            setEmergencyStop(false);
         }
 
         return nextObjects;
@@ -348,6 +414,36 @@ const LidarSpoofingSimulator: React.FC = () => {
     const x = 120;
     const y = 340;
     
+    // Brake lights when braking
+    if (carBraking) {
+        ctx.save();
+        ctx.fillStyle = '#ef4444';
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = '#ef4444';
+        ctx.fillRect(x - 65, y - 20, 8, 12);
+        ctx.fillRect(x - 65, y + 8, 8, 12);
+        ctx.restore();
+    }
+    
+    // Emergency stop indicator
+    if (emergencyStop) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.3)';
+        ctx.beginPath();
+        ctx.arc(x, y, 100, 0, Math.PI * 2);
+        ctx.fill();
+        
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([10, 10]);
+        ctx.stroke();
+        
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 14px monospace';
+        ctx.fillText('EMERGENCY STOP', x - 60, y - 60);
+        ctx.restore();
+    }
+    
     // VSOC Shield Bubble with enhanced animation
     if (vsocActive) {
         ctx.save();
@@ -457,7 +553,21 @@ const LidarSpoofingSimulator: React.FC = () => {
   };
 
   const drawObject = (ctx: CanvasRenderingContext2D, obj: ObjectType) => {
-    if (obj.hidden) return;
+    if (obj.hidden) {
+        // Show faint outline when hidden (camera can still see it)
+        if (vsocActive) {
+            ctx.save();
+            ctx.strokeStyle = '#fbbf24';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([8, 8]);
+            ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+            ctx.fillStyle = '#fbbf24';
+            ctx.font = 'bold 10px monospace';
+            ctx.fillText('CAMERA DETECTED', obj.x, obj.y - 5);
+            ctx.restore();
+        }
+        return;
+    }
 
     ctx.save();
     
@@ -697,7 +807,7 @@ const LidarSpoofingSimulator: React.FC = () => {
     return () => {
        if (requestRef.current) cancelAnimationFrame(requestRef.current);
     }
-  }, [isRunning, objects, attackType, simSpeed, lidarRange, vsocActive]); 
+  }, [isRunning, objects, attackType, simSpeed, carSpeed, lidarRange, vsocActive]); 
 
   const reset = () => {
     setIsRunning(false);
@@ -707,6 +817,9 @@ const LidarSpoofingSimulator: React.FC = () => {
     ]);
     setAttackType('none');
     setLogs([]);
+    setCarSpeed(4);
+    setCarBraking(false);
+    setEmergencyStop(false);
     addLog("Simulation reset. Systems nominal.", "info");
   };
 
