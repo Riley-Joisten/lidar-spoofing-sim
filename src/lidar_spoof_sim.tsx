@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap } from 'lucide-react';
+import { Play, Pause, RotateCcw, ShieldCheck, Wifi, Server, Car, Zap } from 'lucide-react';
 
-// Define types for our simulation objects
+// Types
 interface SimObject {
   x: number;
   y: number;
@@ -9,610 +9,501 @@ interface SimObject {
   height: number;
   type: string;
   id: string | number;
-  hidden?: boolean;
+  hidden?: boolean; // True if local sensors can't see it
+  vsocDetected?: boolean; // True if external V2X network sees it
+  isPhantom?: boolean; // True if it doesn't actually exist
 }
 
-interface Countermeasures {
-  sensorFusion: boolean;
-  signalAuth: boolean;
-  anomalyDetection: boolean;
-  temporalTracking: boolean;
-}
-
-interface CarPosition {
+interface Peer {
   x: number;
   y: number;
+  type: 'camera' | 'car';
+  id: number;
+  active: boolean;
 }
 
 const LidarSpoofingSimulator: React.FC = () => {
-  // Fix: Typed useRef for Canvas and Animation Frame
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
 
+  // Simulation State
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [attackType, setAttackType] = useState<string>('none');
-  const [detectionRate, setDetectionRate] = useState<number>(100);
-  const [collisionRisk, setCollisionRisk] = useState<number>(0);
   const [time, setTime] = useState<number>(0);
   
-  const [countermeasures, setCountermeasures] = useState<Countermeasures>({
-    sensorFusion: false,
-    signalAuth: false,
-    anomalyDetection: false,
-    temporalTracking: false
-  });
+  // VSOC / V2X State
+  const [vsocActive, setVsocActive] = useState<boolean>(false);
+  const [networkStrength, setNetworkStrength] = useState<number>(0);
+  const [consensusScore, setConsensusScore] = useState<number>(0);
 
-  const [carPos, setCarPos] = useState<CarPosition>({ x: 100, y: 300 });
-  
-  // Fix: Typed useState with the SimObject interface to prevent 'never' type errors
-  const [realObjects, setRealObjects] = useState<SimObject[]>([]);
-  const [spoofedObjects, setSpoofedObjects] = useState<SimObject[]>([]);
+  // Physical State
+  const [carPos, setCarPos] = useState({ x: 100, y: 300 });
+  const [objects, setObjects] = useState<SimObject[]>([]);
+  const [peers, setPeers] = useState<Peer[]>([]);
   
   const [carSpeed, setCarSpeed] = useState<number>(2);
-  const [lidarRange, setLidarRange] = useState<number>(400);
-  const [mitigationScore, setMitigationScore] = useState<number>(0);
 
-  // Initialize objects
+  // Initialize Scene
   useEffect(() => {
-    setRealObjects([
-      { x: 400, y: 280, width: 40, height: 60, type: 'pedestrian', id: 1 },
-      { x: 600, y: 290, width: 50, height: 50, type: 'vehicle', id: 2 },
-      { x: 300, y: 320, width: 30, height: 30, type: 'obstacle', id: 3 }
-    ]);
+    resetScene();
   }, []);
 
-  // Animation Loop Management
+  // Manage Peers (Cameras/Other Cars) based on VSOC Status
+  useEffect(() => {
+    if (vsocActive) {
+      // Simulate connecting to peers over time
+      const interval = setInterval(() => {
+        setNetworkStrength(prev => {
+            const newVal = Math.min(100, prev + 5);
+            // Consensus score tracks network strength but with some simulated variance
+            setConsensusScore(Math.floor(newVal * 0.95));
+            return newVal;
+        });
+      }, 100);
+      
+      setPeers([
+        { x: 400, y: 50, type: 'camera', id: 1, active: true }, // Street Camera
+        { x: 700, y: 350, type: 'car', id: 2, active: true },   // Oncoming Car
+        { x: 200, y: 50, type: 'camera', id: 3, active: true }  // Another Camera
+      ]);
+
+      return () => clearInterval(interval);
+    } else {
+      setNetworkStrength(0);
+      setConsensusScore(0);
+      setPeers([]);
+    }
+  }, [vsocActive]);
+
+  // Animation Loop
   useEffect(() => {
     if (isRunning) {
       animationRef.current = requestAnimationFrame(animate);
     }
     return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      if (animationRef.current) cancelAnimationFrame(animationRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRunning, time, attackType, carPos, realObjects, spoofedObjects, carSpeed, lidarRange, countermeasures]);
+  }, [isRunning, time, attackType, carPos, objects, vsocActive, networkStrength, carSpeed]);
+
+  const resetScene = () => {
+    setObjects([
+      { x: 400, y: 280, width: 40, height: 60, type: 'pedestrian', id: 1 },
+      { x: 600, y: 290, width: 50, height: 50, type: 'vehicle', id: 2 },
+    ]);
+    setCarPos({ x: 100, y: 300 });
+    setTime(0);
+  };
 
   const animate = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const width = canvas.width;
     const height = canvas.height;
 
-    // Clear and Draw Background
-    ctx.fillStyle = '#1a1a2e';
-    ctx.fillRect(0, 0, width, height);
+    // 1. Draw Environment
+    drawRoad(ctx, width, height);
 
-    ctx.fillStyle = '#2a2a3e';
-    ctx.fillRect(0, 250, width, 150);
+    // 2. Calculate Logic
+    let currentObjects = applyAttackLogic();
     
-    ctx.strokeStyle = '#ffff00';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([20, 15]);
-    ctx.beginPath();
-    ctx.moveTo(0, 325);
-    ctx.lineTo(width, 325);
-    ctx.stroke();
-    ctx.setLineDash([]);
-
-    applyAttack();
-    drawLidarScans(ctx);
-
-    realObjects.forEach(obj => {
-      drawObject(ctx, obj, '#00ff88', attackType !== 'none');
-    });
-
-    spoofedObjects.forEach(obj => {
-      drawObject(ctx, obj, '#ff3366', true, true);
-    });
-
-    drawCar(ctx);
-    drawDetectionOverlay(ctx);
-    updateMetrics();
-
-    // Move Car
-    setCarPos(prev => ({ ...prev, x: prev.x + carSpeed }));
-    
-    if (carPos.x > width + 50) {
-      setCarPos({ x: -50, y: 300 });
+    // 3. Apply VSOC Countermeasures (Data Fusion)
+    if (vsocActive && networkStrength > 50) {
+      currentObjects = applyVsocAnalysis(currentObjects);
     }
 
-    setTime(prev => prev + 1);
+    // Update state for next frame reference if needed, 
+    // though for this loop we just draw `currentObjects`
+    // setObjects(currentObjects); // Avoid setting state in render loop to prevent flicker/re-render loops
+
+    // 4. Draw Elements
+    if (vsocActive) drawPeersAndNetwork(ctx, peers, carPos);
+    drawLidarScans(ctx); // Local Car Sensors
     
+    // Draw Objects with appropriate status (Real, Hidden, or Identified Fake)
+    currentObjects.forEach(obj => {
+      drawObject(ctx, obj);
+    });
+
+    drawMainCar(ctx);
+    drawHUD(ctx);
+
+    // 5. Update Physics
+    setCarPos(prev => {
+      const newX = prev.x + carSpeed;
+      return { ...prev, x: newX > width + 50 ? -50 : newX };
+    });
+    setTime(prev => prev + 1);
+
     if (isRunning) {
       animationRef.current = requestAnimationFrame(animate);
     }
   };
 
-  const applyAttack = () => {
-    switch (attackType) {
-      case 'phantom':
-        if (time % 60 === 0) {
-          setSpoofedObjects([
-            { x: carPos.x + 200, y: 280, width: 40, height: 60, type: 'phantom', id: 'p1' },
-            { x: carPos.x + 350, y: 300, width: 50, height: 50, type: 'phantom', id: 'p2' }
-          ]);
-        }
-        break;
-      
-      case 'hiding':
-        if (time % 5 === 0) {
-          setRealObjects(prev => prev.map(obj => ({
-            ...obj,
-            hidden: Math.abs(obj.x - carPos.x) < 250
-          })));
-        }
-        break;
-      
-      case 'relay':
-        if (time % 3 === 0) {
-          setSpoofedObjects(realObjects.map(obj => ({
-            ...obj,
-            x: obj.x + 100,
-            y: obj.y - 50,
-            type: 'relayed',
-            id: `relay_${obj.id}`
-          })));
-        }
-        break;
-      
-      case 'saturation':
-        if (time % 20 === 0) {
-          const noise: SimObject[] = [];
-          for (let i = 0; i < 15; i++) {
-            noise.push({
-              x: carPos.x + 150 + Math.random() * 300,
-              y: 260 + Math.random() * 120,
-              width: 20,
-              height: 20,
-              type: 'noise',
-              id: `noise_${i}`
-            });
-          }
-          setSpoofedObjects(noise);
-        }
-        break;
-      
-      default:
-        setSpoofedObjects([]);
-        setRealObjects(prev => prev.map(obj => ({ ...obj, hidden: false })));
-    }
-  };
-
-  // Fix: Explicit type for ctx
-  const drawLidarScans = (ctx: CanvasRenderingContext2D) => {
-    const scanCount = 16;
-    const maxRange = lidarRange;
-    
-    ctx.save();
-    ctx.translate(carPos.x, carPos.y);
-    
-    for (let i = 0; i < scanCount; i++) {
-      const angle = (Math.PI / 2) * (i / scanCount - 0.5);
-      const x = Math.cos(angle) * maxRange;
-      const y = Math.sin(angle) * maxRange;
-      
-      ctx.strokeStyle = attackType !== 'none' ? 'rgba(255, 51, 102, 0.2)' : 'rgba(0, 255, 136, 0.2)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(x, y);
-      ctx.stroke();
-    }
-    
-    ctx.restore();
-  };
-
-  // Fix: Explicit types for arguments
-  const drawObject = (
-    ctx: CanvasRenderingContext2D, 
-    obj: SimObject, 
-    color: string, 
-    isUnderAttack: boolean, 
-    isSpoofed: boolean = false
-  ) => {
-    if (obj.hidden) return;
-    
-    ctx.fillStyle = color;
-    ctx.globalAlpha = isSpoofed ? 0.7 : 1;
-    
-    if (obj.type === 'pedestrian' || obj.type === 'phantom') {
-      ctx.fillRect(obj.x, obj.y + 40, obj.width, 20);
-      ctx.beginPath();
-      ctx.arc(obj.x + obj.width/2, obj.y + 20, 15, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (obj.type === 'vehicle' || obj.type === 'relayed') {
-      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(obj.x + 5, obj.y + 5, 15, 10);
-    } else {
-      ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-    }
-    
-    if (isSpoofed) {
-      ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#ff0000';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([5, 5]);
-      ctx.strokeRect(obj.x - 5, obj.y - 5, obj.width + 10, obj.height + 10);
-      ctx.setLineDash([]);
-    }
-    
-    // We use isUnderAttack to subtly change the rendering context if needed, 
-    // or just to silence the linter if we want to keep the param for future use.
-    if(isUnderAttack) {
-      // Optional: Add a subtle glitch effect logic here if desired
-    }
-    
-    ctx.globalAlpha = 1;
-  };
-
-  const drawCar = (ctx: CanvasRenderingContext2D) => {
-    ctx.fillStyle = '#00aaff';
-    ctx.fillRect(carPos.x - 25, carPos.y - 15, 50, 30);
-    
-    ctx.fillStyle = '#ffaa00';
-    ctx.beginPath();
-    ctx.arc(carPos.x, carPos.y - 20, 8, 0, Math.PI * 2);
-    ctx.fill();
-    
-    ctx.fillStyle = '#333333';
-    ctx.fillRect(carPos.x - 20, carPos.y + 15, 10, 5);
-    ctx.fillRect(carPos.x + 10, carPos.y + 15, 10, 5);
-  };
-
-  const drawDetectionOverlay = (ctx: CanvasRenderingContext2D) => {
-    ctx.font = '12px monospace';
-    ctx.fillStyle = attackType !== 'none' ? '#ff3366' : '#00ff88';
-    ctx.fillText(`Detection Rate: ${detectionRate.toFixed(0)}%`, 10, 20);
-    ctx.fillText(`Collision Risk: ${collisionRisk.toFixed(0)}%`, 10, 40);
-    ctx.fillText(`Attack: ${attackType === 'none' ? 'None' : attackType.toUpperCase()}`, 10, 60);
-  };
-
-  const updateMetrics = () => {
-    let baseDetection = 95;
-    let baseCollision = 5;
-    let mitigation = 0;
-    
-    switch (attackType) {
-      case 'phantom':
-        baseDetection = 45;
-        baseCollision = 75;
-        if (countermeasures.sensorFusion) {
-          baseDetection += 25;
-          baseCollision -= 30;
-          mitigation += 35;
-        }
-        if (countermeasures.anomalyDetection) {
-          baseDetection += 15;
-          baseCollision -= 20;
-          mitigation += 25;
-        }
-        if (countermeasures.temporalTracking) {
-          baseDetection += 10;
-          baseCollision -= 15;
-          mitigation += 20;
-        }
-        break;
-      
-      case 'hiding':
-        baseDetection = 35;
-        baseCollision = 90;
-        if (countermeasures.sensorFusion) {
-          baseDetection += 35;
-          baseCollision -= 40;
-          mitigation += 45;
-        }
-        if (countermeasures.temporalTracking) {
-          baseDetection += 20;
-          baseCollision -= 25;
-          mitigation += 30;
-        }
-        if (countermeasures.anomalyDetection) {
-          baseDetection += 10;
-          baseCollision -= 15;
-          mitigation += 15;
-        }
-        break;
-      
-      case 'relay':
-        baseDetection = 50;
-        baseCollision = 70;
-        if (countermeasures.signalAuth) {
-          baseDetection += 30;
-          baseCollision -= 35;
-          mitigation += 40;
-        }
-        if (countermeasures.sensorFusion) {
-          baseDetection += 20;
-          baseCollision -= 25;
-          mitigation += 30;
-        }
-        if (countermeasures.temporalTracking) {
-          baseDetection += 15;
-          baseCollision -= 15;
-          mitigation += 20;
-        }
-        break;
-      
-      case 'saturation':
-        baseDetection = 25;
-        baseCollision = 65;
-        if (countermeasures.anomalyDetection) {
-          baseDetection += 30;
-          baseCollision -= 30;
-          mitigation += 40;
-        }
-        if (countermeasures.signalAuth) {
-          baseDetection += 25;
-          baseCollision -= 25;
-          mitigation += 35;
-        }
-        if (countermeasures.sensorFusion) {
-          baseDetection += 15;
-          baseCollision -= 15;
-          mitigation += 20;
-        }
-        break;
-      
-      default:
-        baseDetection = 95;
-        baseCollision = 5;
-        mitigation = 0;
-    }
-
-    setDetectionRate(Math.min(100, baseDetection + Math.random() * 5));
-    setCollisionRisk(Math.max(0, baseCollision + Math.random() * 5));
-    setMitigationScore(Math.min(100, mitigation));
-  };
-
-  const reset = () => {
-    setIsRunning(false);
-    setCarPos({ x: 100, y: 300 });
-    setTime(0);
-    setSpoofedObjects([]);
-    setAttackType('none');
-    setRealObjects([
+  const applyAttackLogic = (): SimObject[] => {
+    // Explicitly type the array to allow both numbers and strings for IDs
+    let simObjects: SimObject[] = [
       { x: 400, y: 280, width: 40, height: 60, type: 'pedestrian', id: 1 },
       { x: 600, y: 290, width: 50, height: 50, type: 'vehicle', id: 2 },
-      { x: 300, y: 320, width: 30, height: 30, type: 'obstacle', id: 3 }
-    ]);
+    ];
+
+    switch (attackType) {
+      case 'phantom':
+        // Add fake object
+        simObjects.push({ 
+          x: carPos.x + 200, 
+          y: 300, 
+          width: 40, 
+          height: 40, 
+          type: 'phantom', 
+          id: 'fake1', // String ID is now valid
+          isPhantom: true 
+        });
+        break;
+      
+      case 'hiding':
+        // Mark real objects as hidden from LOCAL sensors
+        if (time % 2 !== 0) { // Flicker effect
+             simObjects = simObjects.map(obj => ({ ...obj, hidden: true }));
+        }
+        break;
+
+      case 'relay':
+        // Move objects slightly to confuse local sensors
+        if (time % 5 === 0) {
+            simObjects = simObjects.map(obj => ({ ...obj, x: obj.x + 50, type: 'relayed' }));
+        }
+        break;
+    }
+    return simObjects;
+  };
+
+  const applyVsocAnalysis = (objects: SimObject[]) => {
+    // This function simulates the VSOC cloud comparing local data with peer data
+    
+    return objects.map(obj => {
+      // Logic: External cameras (Peers) always see the "Truth" in this sim
+      // 1. If it's a Phantom, Peers see NOTHING. Overlap = 0.
+      // 2. If it's Hidden locally, Peers SEE it. Overlap = Mismatch (but safe because detected).
+      
+      if (obj.isPhantom) {
+        // VSOC detects no corresponding object in peer data
+        return { ...obj, vsocDetected: false, type: 'identified_fake' };
+      } 
+      else if (obj.hidden) {
+        // VSOC receives data from peers that object exists
+        return { ...obj, vsocDetected: true, hidden: false, type: 'remote_detected' };
+      } 
+      else if (obj.type === 'relayed') {
+        // VSOC sees the object at original position (we simulate correction here)
+         return { ...obj, x: obj.x - 50, type: 'corrected_pos' };
+      }
+      
+      return { ...obj, vsocDetected: true };
+    });
+  };
+
+  // --- Drawing Functions ---
+
+  const drawRoad = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+    ctx.fillStyle = '#111827';
+    ctx.fillRect(0, 0, w, h);
+    
+    // Road
+    ctx.fillStyle = '#1f2937';
+    ctx.fillRect(0, 200, w, 200);
+    
+    // Lane markers
+    ctx.strokeStyle = '#374151';
+    ctx.setLineDash([30, 30]);
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(0, 300);
+    ctx.lineTo(w, 300);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+
+  const drawMainCar = (ctx: CanvasRenderingContext2D) => {
+    // Car Body
+    ctx.fillStyle = '#3b82f6'; // Blue car
+    ctx.shadowColor = '#2563eb';
+    ctx.shadowBlur = 10;
+    ctx.fillRect(carPos.x - 20, carPos.y - 15, 40, 30);
+    ctx.shadowBlur = 0;
+
+    // Roof / Sensor Dome
+    ctx.fillStyle = vsocActive ? '#10b981' : '#f59e0b'; // Green if connected, Orange if local
+    ctx.beginPath();
+    ctx.arc(carPos.x, carPos.y, 8, 0, Math.PI * 2);
+    ctx.fill();
+  };
+
+  const drawPeersAndNetwork = (ctx: CanvasRenderingContext2D, peers: Peer[], carPos: {x:number, y:number}) => {
+    ctx.strokeStyle = `rgba(6, 182, 212, ${networkStrength / 200})`; // Cyan
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 5]);
+
+    peers.forEach(peer => {
+      // Draw Peer
+      ctx.fillStyle = '#06b6d4'; // Cyan
+      if (peer.type === 'camera') {
+        ctx.beginPath();
+        ctx.arc(peer.x, peer.y, 10, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillText("CAM", peer.x - 10, peer.y - 15);
+        
+        // Draw Camera FOV (Field of View) Cone
+        ctx.fillStyle = 'rgba(6, 182, 212, 0.1)';
+        ctx.beginPath();
+        ctx.moveTo(peer.x, peer.y);
+        ctx.lineTo(peer.x - 100, 400);
+        ctx.lineTo(peer.x + 100, 400);
+        ctx.fill();
+
+      } else {
+        ctx.fillRect(peer.x, peer.y, 40, 30);
+        ctx.fillText("V2X CAR", peer.x - 20, peer.y - 10);
+      }
+
+      // Draw Connection Line to Main Car
+      ctx.beginPath();
+      ctx.moveTo(peer.x, peer.y);
+      ctx.lineTo(carPos.x, carPos.y);
+      ctx.stroke();
+    });
+    ctx.setLineDash([]);
+  };
+
+  const drawLidarScans = (ctx: CanvasRenderingContext2D) => {
+    // Draw local sensor arcs
+    ctx.strokeStyle = attackType === 'none' ? 'rgba(50, 255, 50, 0.3)' : 'rgba(255, 50, 50, 0.3)';
+    ctx.lineWidth = 2;
+    
+    ctx.beginPath();
+    ctx.arc(carPos.x, carPos.y, 150, -0.5, 0.5);
+    ctx.stroke();
+  };
+
+  const drawObject = (ctx: CanvasRenderingContext2D, obj: SimObject) => {
+    // If hidden locally and VSOC off, don't draw (except maybe a ghost for debug)
+    if (obj.hidden && !vsocActive) return;
+
+    let color = '#9ca3af'; // Default gray
+    let stroke = 'transparent';
+    let label = '';
+
+    if (obj.type === 'identified_fake') {
+      color = 'rgba(239, 68, 68, 0.2)'; // Faint Red
+      stroke = '#ef4444';
+      label = '⚠ SPOOF DETECTED';
+    } else if (obj.type === 'remote_detected') {
+      color = 'rgba(6, 182, 212, 0.5)'; // Cyan ghost
+      stroke = '#06b6d4';
+      label = 'V2X REVEALED';
+    } else if (obj.type === 'corrected_pos') {
+      color = 'rgba(16, 185, 129, 0.5)'; // Green
+      stroke = '#10b981';
+      label = 'POS CORRECTED';
+    } else if (obj.isPhantom) {
+        // Attack is active, VSOC is OFF, so car thinks it's real
+        color = '#ef4444'; // Red solid
+        label = 'OBSTACLE DETECTED';
+    }
+
+    // Draw the Object
+    ctx.fillStyle = color;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = 2;
+    
+    ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+    if (stroke !== 'transparent') ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+
+    // Label
+    if (label) {
+      ctx.fillStyle = stroke === 'transparent' ? '#fff' : stroke;
+      ctx.font = '10px monospace';
+      ctx.fillText(label, obj.x, obj.y - 5);
+    }
+  };
+
+  const drawHUD = (ctx: CanvasRenderingContext2D) => {
+    // Top Left Status
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.fillRect(10, 10, 220, 100);
+    ctx.strokeStyle = '#374151';
+    ctx.strokeRect(10, 10, 220, 100);
+
+    ctx.font = '14px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText(`Attack: ${attackType.toUpperCase()}`, 20, 35);
+    
+    ctx.fillStyle = vsocActive ? '#06b6d4' : '#6b7280';
+    ctx.fillText(`VSOC Connection: ${vsocActive ? 'ONLINE' : 'OFFLINE'}`, 20, 55);
+    
+    if (vsocActive) {
+        ctx.fillStyle = networkStrength > 80 ? '#10b981' : '#f59e0b';
+        ctx.fillText(`Net Strength: ${networkStrength.toFixed(0)}%`, 20, 75);
+        ctx.fillText(`Peer Nodes: ${peers.length}`, 20, 95);
+    }
   };
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-4 md:p-6 bg-gray-900 text-white rounded-lg">
-      <div className="mb-6">
-        <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-2">
-          <Shield className="text-blue-400" />
-          LiDAR Spoofing Simulator
-        </h1>
-        <p className="text-gray-400 text-sm md:text-base">
-          Educational demonstration of vulnerabilities in autonomous vehicle LiDAR systems.
-        </p>
+    <div className="w-full max-w-5xl mx-auto p-6 bg-gray-900 text-white rounded-xl shadow-2xl">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-3">
+            <Server className="text-cyan-400" />
+            VSOC Cooperative Perception Sim
+          </h1>
+          <p className="text-gray-400 text-sm mt-1">
+            Countering LiDAR attacks using Vehicle-to-Everything (V2X) Data Fusion
+          </p>
+        </div>
+        <div className={`px-4 py-2 rounded-full border ${vsocActive ? 'border-cyan-500 bg-cyan-900/30 text-cyan-400' : 'border-red-500 bg-red-900/30 text-red-400'}`}>
+            {vsocActive ? "SECURE NETWORK ACTIVE" : "ISOLATED SYSTEM - VULNERABLE"}
+        </div>
       </div>
 
-      <div className="mb-4 w-full overflow-hidden rounded bg-gray-800 border-2 border-gray-700">
-        {/* Responsive Canvas: width 100% to fit container, height auto to maintain ratio */}
-        <canvas
-          ref={canvasRef}
-          width={800}
-          height={400}
-          className="w-full h-auto block"
-        />
+      {/* Main Canvas */}
+      <div className="relative mb-6 rounded-lg overflow-hidden border-2 border-gray-700 bg-black">
+        <canvas ref={canvasRef} width={800} height={400} className="w-full h-auto block" />
+        
+        {/* Overlay Warning if Attack Successful */}
+        {!vsocActive && attackType !== 'none' && (
+            <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-red-600/80 text-white px-6 py-4 rounded animate-pulse text-center">
+                <h3 className="text-xl font-bold">SENSOR COMPROMISED</h3>
+                <p>Local Lidar Data Unreliable</p>
+            </div>
+        )}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        {/* Attack Controls */}
-        <div className="bg-gray-800 p-4 rounded shadow-md">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Zap className="text-yellow-400" size={20} />
-            Attack Controls
+      {/* Controls Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        
+        {/* Attack Panel */}
+        <div className="bg-gray-800 p-4 rounded-lg border border-gray-700">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Zap className="text-yellow-400" size={18} /> Attack Scenarios
           </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button
-              onClick={() => setAttackType('phantom')}
-              className={`p-2 rounded text-sm font-medium ${attackType === 'phantom' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
+          <div className="space-y-2">
+            <button 
+                onClick={() => setAttackType('phantom')}
+                className={`w-full text-left px-3 py-2 rounded transition ${attackType === 'phantom' ? 'bg-red-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
             >
-              Phantom Object
+                1. Phantom Injection (Fake Object)
             </button>
-            <button
-              onClick={() => setAttackType('hiding')}
-              className={`p-2 rounded text-sm font-medium ${attackType === 'hiding' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
+            <button 
+                onClick={() => setAttackType('hiding')}
+                className={`w-full text-left px-3 py-2 rounded transition ${attackType === 'hiding' ? 'bg-red-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
             >
-              Object Hiding
+                2. Object Hiding (Blind Spot)
             </button>
-            <button
-              onClick={() => setAttackType('relay')}
-              className={`p-2 rounded text-sm font-medium ${attackType === 'relay' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
+            <button 
+                onClick={() => setAttackType('relay')}
+                className={`w-full text-left px-3 py-2 rounded transition ${attackType === 'relay' ? 'bg-red-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
             >
-              Relay Attack
+                3. Relay Attack (Position Shift)
             </button>
-            <button
-              onClick={() => setAttackType('saturation')}
-              className={`p-2 rounded text-sm font-medium ${attackType === 'saturation' ? 'bg-red-600' : 'bg-gray-700'} hover:bg-red-500 transition`}
+            <button 
+                onClick={() => setAttackType('none')}
+                className={`w-full text-left px-3 py-2 rounded transition ${attackType === 'none' ? 'bg-green-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}
             >
-              Saturation
-            </button>
-            <button
-              onClick={() => setAttackType('none')}
-              className={`col-span-1 sm:col-span-2 p-2 rounded text-sm font-medium ${attackType === 'none' ? 'bg-green-600' : 'bg-gray-700'} hover:bg-green-500 transition`}
-            >
-              Normal Operation
+                Reset / Normal Operation
             </button>
           </div>
         </div>
 
-        {/* Countermeasures */}
-        <div className="bg-gray-800 p-4 rounded shadow-md">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <Shield className="text-blue-400" size={20} />
-            Countermeasures
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-4">
-            <label className="flex items-center gap-2 cursor-pointer p-1 hover:bg-gray-700 rounded">
-              <input
-                type="checkbox"
-                checked={countermeasures.sensorFusion}
-                onChange={(e) => setCountermeasures(prev => ({ ...prev, sensorFusion: e.target.checked }))}
-                className="w-4 h-4 rounded text-blue-500"
-              />
-              <span className="text-sm">Sensor Fusion</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer p-1 hover:bg-gray-700 rounded">
-              <input
-                type="checkbox"
-                checked={countermeasures.signalAuth}
-                onChange={(e) => setCountermeasures(prev => ({ ...prev, signalAuth: e.target.checked }))}
-                className="w-4 h-4 rounded text-blue-500"
-              />
-              <span className="text-sm">Signal Auth</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer p-1 hover:bg-gray-700 rounded">
-              <input
-                type="checkbox"
-                checked={countermeasures.anomalyDetection}
-                onChange={(e) => setCountermeasures(prev => ({ ...prev, anomalyDetection: e.target.checked }))}
-                className="w-4 h-4 rounded text-blue-500"
-              />
-              <span className="text-sm">Anomaly ML</span>
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer p-1 hover:bg-gray-700 rounded">
-              <input
-                type="checkbox"
-                checked={countermeasures.temporalTracking}
-                onChange={(e) => setCountermeasures(prev => ({ ...prev, temporalTracking: e.target.checked }))}
-                className="w-4 h-4 rounded text-blue-500"
-              />
-              <span className="text-sm">Temporal Track</span>
-            </label>
+        {/* VSOC Control Center */}
+        <div className="bg-gray-800 p-4 rounded-lg border border-cyan-700 relative overflow-hidden">
+          <div className="absolute top-0 right-0 p-4 opacity-10">
+            <Wifi size={100} />
           </div>
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <ShieldCheck className="text-cyan-400" size={18} /> VSOC Defense
+          </h3>
           
-          {attackType !== 'none' && (
-            <div className="mt-4 pt-4 border-t border-gray-700">
-              <div className="flex justify-between mb-1">
-                <span className="text-xs text-gray-400">Mitigation Effectiveness</span>
-                <span className={`text-xs font-bold ${mitigationScore > 60 ? 'text-green-400' : mitigationScore > 30 ? 'text-yellow-400' : 'text-red-400'}`}>
-                  {mitigationScore.toFixed(0)}%
-                </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-1.5">
-                <div
-                  className={`h-1.5 rounded-full transition-all duration-500 ${mitigationScore > 60 ? 'bg-green-500' : mitigationScore > 30 ? 'bg-yellow-500' : 'bg-red-500'}`}
-                  style={{ width: `${mitigationScore}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
+          <button
+            onClick={() => setVsocActive(!vsocActive)}
+            className={`w-full py-4 rounded-lg font-bold text-lg transition flex items-center justify-center gap-3 mb-4 shadow-lg ${
+                vsocActive 
+                ? 'bg-cyan-600 hover:bg-cyan-500 text-white' 
+                : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+            }`}
+          >
+            {vsocActive ? <Wifi className="animate-pulse" /> : <Wifi className="opacity-50" />}
+            {vsocActive ? 'DISCONNECT FROM CLOUD' : 'CONNECT TO VSOC CLOUD'}
+          </button>
 
-      {/* Metrics & Controls */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-        <div className="bg-gray-800 p-4 rounded shadow-md">
-          <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
-            <AlertTriangle className="text-orange-400" size={20} />
-            System Status
-          </h3>
           <div className="space-y-3 text-sm">
-            <div>
-              <div className="flex justify-between mb-1">
-                <span>Confidence</span>
-                <span className={detectionRate < 60 ? 'text-red-400' : 'text-green-400'}>
-                  {detectionRate.toFixed(0)}%
+             <div className="flex justify-between items-center">
+                <span className="text-gray-400 flex items-center gap-1">
+                   <Car size={14} className="text-cyan-400" /> Connected Peers
                 </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full transition-all duration-300 ${detectionRate < 60 ? 'bg-red-500' : 'bg-green-500'}`}
-                  style={{ width: `${detectionRate}%` }}
-                />
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between mb-1">
-                <span>Risk Level</span>
-                <span className={collisionRisk > 50 ? 'text-red-400' : 'text-green-400'}>
-                  {collisionRisk.toFixed(0)}%
+                <span className="font-mono text-cyan-300">{vsocActive ? peers.length : 0} Nodes</span>
+             </div>
+             <div className="flex justify-between items-center">
+                <span className="text-gray-400">Data Integrity</span>
+                <div className="w-24 h-2 bg-gray-700 rounded-full overflow-hidden">
+                    <div className="h-full bg-cyan-400 transition-all duration-1000" style={{width: `${networkStrength}%`}}></div>
+                </div>
+             </div>
+             <div className="flex justify-between items-center">
+                <span className="text-gray-400">Consensus Score</span>
+                <span className={`font-mono font-bold ${consensusScore > 80 ? 'text-green-400' : 'text-yellow-400'}`}>
+                    {consensusScore}/100
                 </span>
-              </div>
-              <div className="w-full bg-gray-700 rounded-full h-2">
-                <div
-                  className={`h-2 rounded-full transition-all duration-300 ${collisionRisk > 50 ? 'bg-red-500' : 'bg-green-500'}`}
-                  style={{ width: `${collisionRisk}%` }}
-                />
-              </div>
-            </div>
+             </div>
           </div>
         </div>
 
-        <div className="bg-gray-800 p-4 rounded shadow-md">
-          <h3 className="text-lg font-semibold mb-3">Parameters</h3>
-          <div className="space-y-4">
+        {/* Simulation Controls */}
+        <div className="bg-gray-800 p-4 rounded-lg border border-gray-700 flex flex-col justify-between">
             <div>
-              <div className="flex justify-between text-xs text-gray-400 mb-1">
-                <span>Speed</span>
-                <span>{carSpeed.toFixed(1)} m/s</span>
-              </div>
-              <input
-                type="range"
-                min="0.5"
-                max="5"
-                step="0.5"
-                value={carSpeed}
-                onChange={(e) => setCarSpeed(parseFloat(e.target.value))}
-                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
+                <h3 className="text-lg font-semibold mb-4">Sim Controls</h3>
+                
+                {/* Car Speed Control */}
+                <div className="mb-4">
+                  <div className="flex justify-between text-xs text-gray-400 mb-1">
+                    <span>Sim Speed</span>
+                    <span>{carSpeed.toFixed(1)}x</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="5.0"
+                    step="0.5"
+                    value={carSpeed}
+                    onChange={(e) => setCarSpeed(parseFloat(e.target.value))}
+                    className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex gap-2 mb-4">
+                    <button onClick={() => setIsRunning(!isRunning)} className="flex-1 bg-blue-600 hover:bg-blue-500 py-2 rounded flex items-center justify-center gap-2">
+                        {isRunning ? <Pause size={18} /> : <Play size={18} />} {isRunning ? "Pause" : "Start"}
+                    </button>
+                    <button onClick={resetScene} className="bg-gray-600 hover:bg-gray-500 px-4 rounded">
+                        <RotateCcw size={18} />
+                    </button>
+                </div>
             </div>
-            <div>
-              <div className="flex justify-between text-xs text-gray-400 mb-1">
-                <span>Lidar Range</span>
-                <span>{lidarRange}m</span>
-              </div>
-              <input
-                type="range"
-                min="200"
-                max="600"
-                step="50"
-                value={lidarRange}
-                onChange={(e) => setLidarRange(parseInt(e.target.value))}
-                className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
-              />
+            
+            <div className="bg-black/30 p-3 rounded text-xs text-gray-400 border border-gray-700">
+                <p className="mb-2"><strong className="text-cyan-400">How VSOC Works:</strong></p>
+                <p>The car cross-references its local LiDAR data with video feeds from street cameras and other vehicles.</p>
+                <p className="mt-2 text-yellow-500">
+                    {vsocActive 
+                     ? "• Inconsistencies are flagged as attacks.\n• Blind spots are filled by peer data." 
+                     : "• System reliant solely on local sensors."}
+                </p>
             </div>
-          </div>
         </div>
-      </div>
 
-      <div className="flex gap-3 mb-6">
-        <button
-          onClick={() => setIsRunning(!isRunning)}
-          className="flex-1 flex justify-center items-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-700 rounded font-semibold transition shadow-lg"
-        >
-          {isRunning ? <Pause size={20} /> : <Play size={20} />}
-          {isRunning ? 'Pause Sim' : 'Start Sim'}
-        </button>
-        <button
-          onClick={reset}
-          className="flex-none flex justify-center items-center gap-2 px-4 py-3 bg-gray-700 hover:bg-gray-600 rounded font-semibold transition shadow-lg"
-        >
-          <RotateCcw size={20} />
-          Reset
-        </button>
-      </div>
-
-      <div className="bg-gray-800 p-4 rounded border-l-4 border-blue-500">
-        <h3 className="text-lg font-bold mb-2 text-white">Attack Information</h3>
-        <p className="text-sm text-gray-300">
-          {attackType === 'phantom' && "Phantom Object: Injecting fake points to trigger false braking."}
-          {attackType === 'hiding' && "Object Hiding: Masking real obstacles to cause collisions."}
-          {attackType === 'relay' && "Relay Attack: Displacing object location data."}
-          {attackType === 'saturation' && "Saturation: Flooding sensor with noise to blind the system."}
-          {attackType === 'none' && "System operating normally. No active threats detected."}
-        </p>
       </div>
     </div>
   );
