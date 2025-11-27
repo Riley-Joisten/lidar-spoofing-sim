@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap, Activity, Terminal, Settings, Lock, Eye, Server } from 'lucide-react';
+import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap, Activity, Terminal, Lock, Server } from 'lucide-react';
 
 // --- Types ---
 type ObjectType = {
@@ -30,18 +30,16 @@ const LidarSpoofingSimulator: React.FC = () => {
   const scrollOffset = useRef<number>(0);
 
   const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [vsocActive, setVsocActive] = useState<boolean>(false); // NEW: VSOC Toggle
+  const [vsocActive, setVsocActive] = useState<boolean>(false); 
   const [attackType, setAttackType] = useState<'none' | 'phantom' | 'hiding' | 'relay' | 'saturation'>('none');
   
-  // Simulation settings
-  const [simSpeed, setSimSpeed] = useState<number>(4);
-  const [lidarRange, setLidarRange] = useState<number>(350);
+  // Simulation constants (Removed Setters since controls were removed from UI)
+  const simSpeed = 4;
+  const lidarRange = 350;
   
   // Metrics
-  const [detectionRate, setDetectionRate] = useState<number>(100);
   const [collisionRisk, setCollisionRisk] = useState<number>(0);
-  const [integrityScore, setIntegrityScore] = useState<number>(100); // NEW: Data Integrity
-  const [nearestObjectDist, setNearestObjectDist] = useState<number | null>(null);
+  const [integrityScore, setIntegrityScore] = useState<number>(100);
   
   // Logs
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -95,7 +93,8 @@ const LidarSpoofingSimulator: React.FC = () => {
 
     setObjects(prevObjects => {
       // Move objects
-      let nextObjects = prevObjects.map(obj => ({
+      // FIX: Explicitly type this array so TypeScript doesn't get confused by optional properties
+      let nextObjects: ObjectType[] = prevObjects.map(obj => ({
         ...obj,
         x: obj.x - simSpeed,
         // Reset VSOC flags every frame for recalc
@@ -172,7 +171,7 @@ const LidarSpoofingSimulator: React.FC = () => {
     ctx.fillStyle = '#020617'; // Deepest Slate
     ctx.fillRect(0, 0, width, height);
 
-    drawGrid(ctx, width, height);
+    drawGrid(ctx, width);
     drawCar(ctx);
 
     // Draw Objects
@@ -212,7 +211,6 @@ const LidarSpoofingSimulator: React.FC = () => {
 
     // LiDAR Rays & Points
     const metrics = calculateLidar(ctx, objects);
-    setNearestObjectDist(metrics.minDist);
     
     // 3. Metrics Update
     if (Math.floor(time) % 10 === 0) {
@@ -241,7 +239,7 @@ const LidarSpoofingSimulator: React.FC = () => {
       ctx.restore();
   }
 
-  const drawGrid = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+  const drawGrid = (ctx: CanvasRenderingContext2D, w: number) => {
     // Cyberpunk Grid Floor
     const roadTop = 250;
     const roadBot = 450;
@@ -430,7 +428,6 @@ const LidarSpoofingSimulator: React.FC = () => {
   const calculateRiskMetrics = (dist: number | null) => {
       let risk = 5; // Base risk
       let integrity = 100;
-      let detection = 98;
 
       // --- RISK CALCULATOR ---
 
@@ -441,7 +438,6 @@ const LidarSpoofingSimulator: React.FC = () => {
       else {
           // Under Attack
           integrity = 40; 
-          detection = 60;
 
           if (attackType === 'phantom') {
              // Fake braking event
@@ -450,7 +446,6 @@ const LidarSpoofingSimulator: React.FC = () => {
           }
           if (attackType === 'saturation') {
              risk = 60;
-             detection = 10;
           }
           if (attackType === 'relay') {
              risk = 75; // Collision likely due to offset
@@ -466,10 +461,8 @@ const LidarSpoofingSimulator: React.FC = () => {
           
           if (attackType === 'phantom') {
               risk = 10; // We identified it's fake, risk drops
-              detection = 100; // We successfully detected the falsity
           }
           if (attackType === 'saturation') {
-              detection = 85; // Filtering restores most vision
               risk = 20;
           }
           if (attackType === 'relay') {
@@ -485,7 +478,6 @@ const LidarSpoofingSimulator: React.FC = () => {
       // Smooth interpolation
       setCollisionRisk(prev => prev + (risk - prev) * 0.1);
       setIntegrityScore(prev => prev + (integrity - prev) * 0.1);
-      setDetectionRate(prev => prev + (detection - prev) * 0.1);
   };
 
   const reset = () => {
