@@ -11,7 +11,6 @@ type ObjectType = {
   id: string | number;
   hidden?: boolean;
   distance?: number;
-  // VSOC specific properties
   flagged?: boolean; 
   correctedX?: number; 
 };
@@ -28,11 +27,13 @@ const LidarSpoofingSimulator: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const requestRef = useRef<number | null>(null);
   const scrollOffset = useRef<number>(0);
+  const particlesRef = useRef<Array<{x: number, y: number, vx: number, vy: number, life: number}>>([]);
 
   // Simulation Controls
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [vsocActive, setVsocActive] = useState<boolean>(false); 
   const [attackType, setAttackType] = useState<'none' | 'phantom' | 'hiding' | 'relay' | 'saturation'>('none');
+  const [showAttackInfo, setShowAttackInfo] = useState<boolean>(true);
   
   // Adjustable Parameters
   const [simSpeed, setSimSpeed] = useState<number>(4);
@@ -68,14 +69,43 @@ const LidarSpoofingSimulator: React.FC = () => {
   // --- VSOC Logic Hooks ---
   useEffect(() => {
       if (vsocActive && attackType !== 'none') {
-          addLog(`VSOC: Analysis started for ${attackType} signature...`, "info");
+          addLog(`VSOC: Multi-sensor correlation initiated for ${attackType} pattern...`, "info");
           setTimeout(() => {
-              addLog(`VSOC: Counter-measures deployed.`, "success");
+              addLog(`VSOC: Cross-validated with camera, radar & GPS. Threat neutralized.`, "success");
           }, 800);
       } else if (attackType !== 'none') {
-          addLog(`WARNING: System vulnerable to ${attackType} attack!`, "alert");
+          addLog(`⚠ ALERT: Uncorrelated sensor data detected - ${attackType} signature!`, "alert");
       }
   }, [attackType, vsocActive]);
+
+  // Attack info definitions
+  const attackInfo = {
+    none: {
+      title: "Normal Operation",
+      desc: "All sensors operating within normal parameters. LiDAR data is being processed without interference.",
+      vsocHelp: "VSOC continuously monitors sensor fusion patterns and validates data integrity across all inputs."
+    },
+    phantom: {
+      title: "Phantom Object Injection",
+      desc: "Attacker injects false LiDAR returns that create ghost objects. The vehicle sees obstacles that don't exist, potentially causing unnecessary emergency braking.",
+      vsocHelp: "VSOC cross-references LiDAR data with camera vision and radar. Phantom objects that appear only in LiDAR are flagged and rejected from the decision pipeline."
+    },
+    hiding: {
+      title: "Object Hiding/Cloaking",
+      desc: "Attackers suppress LiDAR reflections from real objects using signal absorption or jamming. Critical obstacles become invisible to the sensor.",
+      vsocHelp: "VSOC detects missing expected returns by comparing camera-detected objects with LiDAR data. Objects visible in camera but absent in LiDAR trigger high-priority alerts."
+    },
+    relay: {
+      title: "Relay/Spoofing Attack",
+      desc: "Attackers relay and modify LiDAR signals to report false positions. Objects appear further or closer than they actually are, compromising collision avoidance.",
+      vsocHelp: "VSOC uses GPS and IMU data to calculate expected object positions. Discrepancies between visual tracking and LiDAR position data expose the attack."
+    },
+    saturation: {
+      title: "Saturation/Jamming Attack",
+      desc: "High-power interference floods the LiDAR sensor with noise, degrading signal quality and potentially blinding the system entirely.",
+      vsocHelp: "VSOC identifies abnormal noise patterns and elevated return counts. The system shifts trust to backup sensors (camera/radar) and applies noise filtering algorithms."
+    }
+  };
 
   // --- Animation Loop ---
   const animate = (time: number) => {
@@ -163,15 +193,48 @@ const LidarSpoofingSimulator: React.FC = () => {
     }
 
     // 2. Drawing (Always Draw, even if paused)
-    // Dark Sci-Fi Background
+    // Dark Sci-Fi Background with depth
     const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
-    bgGrad.addColorStop(0, '#020617');
-    bgGrad.addColorStop(1, '#0f172a');
+    bgGrad.addColorStop(0, '#0a0e1a');
+    bgGrad.addColorStop(0.5, '#0f172a');
+    bgGrad.addColorStop(1, '#1e293b');
     ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
+    // Starfield effect
+    ctx.fillStyle = 'rgba(255,255,255,0.3)';
+    for(let i=0; i<50; i++) {
+      const x = (i * 137.5) % width;
+      const y = (i * 73.2) % 200;
+      const size = Math.random() * 1.5;
+      ctx.fillRect(x, y, size, size);
+    }
+
     drawGrid(ctx, width, height);
     drawCar(ctx);
+
+    // Update and draw particles (for attack effects)
+    if (attackType === 'saturation') {
+      particlesRef.current = particlesRef.current.filter(p => p.life > 0);
+      if (isRunning && Math.random() < 0.3) {
+        particlesRef.current.push({
+          x: 120 + Math.random() * 400,
+          y: 200 + Math.random() * 200,
+          vx: (Math.random() - 0.5) * 3,
+          vy: (Math.random() - 0.5) * 3,
+          life: 30
+        });
+      }
+      particlesRef.current.forEach(p => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life--;
+        ctx.fillStyle = vsocActive ? `rgba(59, 130, 246, ${p.life/30})` : `rgba(239, 68, 68, ${p.life/30})`;
+        ctx.fillRect(p.x, p.y, 3, 3);
+      });
+    } else {
+      particlesRef.current = [];
+    }
 
     // Draw Objects
     objects.forEach(obj => {
@@ -239,36 +302,40 @@ const LidarSpoofingSimulator: React.FC = () => {
   const drawGrid = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
     const horizonY = 200;
     
-    // Road Surface
+    // Road Surface with glow
     const grad = ctx.createLinearGradient(0, horizonY, 0, h);
-    grad.addColorStop(0, '#0f172a');
-    grad.addColorStop(1, '#1e293b');
+    grad.addColorStop(0, '#1e293b');
+    grad.addColorStop(0.5, '#0f172a');
+    grad.addColorStop(1, '#020617');
     ctx.fillStyle = grad;
     ctx.fillRect(0, horizonY, w, h - horizonY);
 
-    // Grid Lines (Perspective)
+    // Grid Lines (Perspective) with glow
     ctx.save();
     ctx.beginPath();
-    ctx.strokeStyle = vsocActive ? 'rgba(14, 165, 233, 0.3)' : 'rgba(148, 163, 184, 0.1)';
+    ctx.strokeStyle = vsocActive ? 'rgba(59, 130, 246, 0.4)' : 'rgba(100, 116, 139, 0.2)';
     ctx.lineWidth = 1;
+    ctx.shadowBlur = vsocActive ? 10 : 0;
+    ctx.shadowColor = vsocActive ? '#3b82f6' : 'transparent';
 
     const offset = scrollOffset.current;
     
     // Vertical perspective lines
     for(let i = -w; i < w * 2; i+=100) {
         ctx.moveTo(i, horizonY);
-        // Fan out towards bottom
         ctx.lineTo(i - (i - w/2) * 1.5, h); 
     }
     
     ctx.stroke();
     
-    // Moving Horizontal Lines (Floor effect)
+    // Moving Horizontal Lines with enhanced visibility
     ctx.beginPath();
-    // Only draw a few lines that "move" down
+    ctx.shadowBlur = 5;
     for(let i=0; i<10; i++) {
         const yPos = horizonY + (i * 30 + offset) % (h-horizonY);
         if(yPos > horizonY) {
+            const alpha = 1 - (yPos - horizonY) / (h - horizonY);
+            ctx.strokeStyle = vsocActive ? `rgba(59, 130, 246, ${alpha * 0.4})` : `rgba(100, 116, 139, ${alpha * 0.2})`;
             ctx.moveTo(0, yPos);
             ctx.lineTo(w, yPos);
         }
@@ -281,36 +348,58 @@ const LidarSpoofingSimulator: React.FC = () => {
     const x = 120;
     const y = 340;
     
-    // VSOC Shield Bubble
+    // VSOC Shield Bubble with enhanced animation
     if (vsocActive) {
         ctx.save();
+        const pulseTime = Date.now() / 1000;
+        const pulse = Math.sin(pulseTime * 2) * 0.2 + 0.8;
         ctx.beginPath();
-        ctx.ellipse(x + 20, y, 90, 40, 0, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(14, 165, 233, 0.1)';
-        ctx.strokeStyle = '#0ea5e9';
-        ctx.lineWidth = 1;
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = '#0ea5e9';
+        ctx.ellipse(x + 20, y, 90 * pulse, 40 * pulse, 0, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(59, 130, 246, 0.15)';
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 2;
+        ctx.shadowBlur = 20;
+        ctx.shadowColor = '#3b82f6';
         ctx.stroke();
         ctx.fill();
+        
+        // Inner shield ring
+        ctx.beginPath();
+        ctx.ellipse(x + 20, y, 60 * pulse, 25 * pulse, 0, 0, Math.PI*2);
+        ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
         ctx.restore();
     }
 
-    // Headlights
+    // Enhanced Headlights with better visibility
     ctx.save();
+    const lightGrad = ctx.createRadialGradient(x + 50, y, 0, x + 50, y, 300);
+    lightGrad.addColorStop(0, 'rgba(253, 224, 71, 0.3)');
+    lightGrad.addColorStop(0.5, 'rgba(253, 224, 71, 0.1)');
+    lightGrad.addColorStop(1, 'rgba(253, 224, 71, 0)');
+    ctx.fillStyle = lightGrad;
     ctx.beginPath();
-    ctx.moveTo(x + 50, y - 15);
-    ctx.lineTo(x + 300, y - 60);
-    ctx.lineTo(x + 300, y + 60);
-    ctx.lineTo(x + 50, y + 15);
-    ctx.fillStyle = 'rgba(253, 224, 71, 0.1)'; // Yellow faint light
+    ctx.moveTo(x + 50, y - 20);
+    ctx.lineTo(x + 400, y - 80);
+    ctx.lineTo(x + 400, y + 80);
+    ctx.lineTo(x + 50, y + 20);
     ctx.fill();
     ctx.restore();
 
-    // Car Body (Futuristic Shape)
-    ctx.fillStyle = '#3b82f6'; // Blue
+    // Car Body with improved depth
+    ctx.save();
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+    
+    // Main body gradient
+    const bodyGrad = ctx.createLinearGradient(x - 60, y - 25, x - 60, y + 25);
+    bodyGrad.addColorStop(0, '#60a5fa');
+    bodyGrad.addColorStop(0.5, '#3b82f6');
+    bodyGrad.addColorStop(1, '#2563eb');
+    ctx.fillStyle = bodyGrad;
+    
     ctx.beginPath();
-    // Hood
     ctx.moveTo(x + 60, y);
     ctx.lineTo(x, y - 25);
     ctx.lineTo(x - 60, y - 25);
@@ -319,8 +408,12 @@ const LidarSpoofingSimulator: React.FC = () => {
     ctx.closePath();
     ctx.fill();
     
-    // Roof/Cockpit
-    ctx.fillStyle = '#1e293b'; // Dark Glass
+    // Roof/Cockpit with glass effect
+    const glassGrad = ctx.createLinearGradient(x - 50, y - 15, x - 50, y + 15);
+    glassGrad.addColorStop(0, '#334155');
+    glassGrad.addColorStop(0.5, '#1e293b');
+    glassGrad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = glassGrad;
     ctx.beginPath();
     ctx.moveTo(x + 10, y);
     ctx.lineTo(x - 20, y - 15);
@@ -329,18 +422,37 @@ const LidarSpoofingSimulator: React.FC = () => {
     ctx.lineTo(x - 20, y + 15);
     ctx.closePath();
     ctx.fill();
+    
+    // Glass reflection
+    ctx.fillStyle = 'rgba(255,255,255,0.1)';
+    ctx.fillRect(x - 48, y - 13, 25, 8);
+    ctx.restore();
 
-    // Sensor Array (Spinning)
-    const time = Date.now() / 60;
+    // Enhanced Sensor Array with better animation
+    const time = Date.now() / 50;
     ctx.save();
     ctx.translate(x - 10, y);
-    ctx.rotate(time);
+    ctx.rotate(time * 0.05);
+    
+    // Sensor base
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(-15, -6, 30, 12);
+    
+    // Sensor core
     ctx.fillStyle = attackType === 'none' || vsocActive ? '#10b981' : '#ef4444'; 
     ctx.fillRect(-12, -4, 24, 8);
-    // Glow
-    ctx.shadowBlur = 15;
+    
+    // Enhanced glow
+    ctx.shadowBlur = 25;
     ctx.shadowColor = ctx.fillStyle;
-    ctx.fill();
+    ctx.fillRect(-12, -4, 24, 8);
+    
+    // Sensor details
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for(let i=-8; i<=8; i+=4) {
+      ctx.fillRect(i-1, -2, 2, 4);
+    }
+    
     ctx.restore();
   };
 
@@ -352,63 +464,112 @@ const LidarSpoofingSimulator: React.FC = () => {
     let color = '#a855f7'; 
     if (obj.type === 'pedestrian') color = '#22c55e';
     if (obj.type === 'phantom') color = '#ef4444';
-    if (obj.type === 'noise') color = '#cbd5e1';
+    if (obj.type === 'noise') color = '#94a3b8';
 
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    // Enhanced shadow with blur
+    ctx.fillStyle = 'rgba(0,0,0,0.4)';
+    ctx.filter = 'blur(4px)';
     ctx.beginPath();
-    ctx.ellipse(obj.x + obj.width/2, obj.y + obj.height - 5, obj.width/2, 8, 0, 0, Math.PI*2);
+    ctx.ellipse(obj.x + obj.width/2, obj.y + obj.height + 2, obj.width/2 + 5, 10, 0, 0, Math.PI*2);
     ctx.fill();
+    ctx.filter = 'none';
 
-    // Main Body
+    // Main Body with improved rendering
     if (obj.type === 'noise') {
         ctx.fillStyle = color;
+        ctx.shadowBlur = 5;
+        ctx.shadowColor = color;
         ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
     } else {
-        // 3D-ish Block
-        ctx.fillStyle = color;
+        // 3D-ish Block with gradients
+        const objGrad = ctx.createLinearGradient(obj.x, obj.y, obj.x, obj.y + obj.height);
+        objGrad.addColorStop(0, color);
+        objGrad.addColorStop(1, color + '99');
+        ctx.fillStyle = objGrad;
         ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
-        // Side/Top shading
-        ctx.fillStyle = 'rgba(255,255,255,0.2)';
-        ctx.fillRect(obj.x, obj.y, obj.width, 5); // Top highlight
+        
+        // Top highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.fillRect(obj.x, obj.y, obj.width, 6);
+        
+        // Side panel
+        ctx.fillStyle = 'rgba(0,0,0,0.2)';
+        ctx.fillRect(obj.x + obj.width - 8, obj.y + 6, 8, obj.height - 6);
+        
+        // Details for vehicles
+        if (obj.type === 'vehicle') {
+          ctx.fillStyle = '#1e293b';
+          ctx.fillRect(obj.x + 10, obj.y + 8, obj.width - 30, 15);
+          ctx.fillStyle = 'rgba(253, 224, 71, 0.8)';
+          ctx.fillRect(obj.x + 5, obj.y + obj.height/2 - 3, 8, 6);
+        }
+        
+        // Details for pedestrians
+        if (obj.type === 'pedestrian') {
+          ctx.fillStyle = 'rgba(255,255,255,0.6)';
+          ctx.beginPath();
+          ctx.arc(obj.x + obj.width/2, obj.y + 12, 8, 0, Math.PI*2);
+          ctx.fill();
+        }
     }
 
-    // --- VSOC TARGETING HUD ---
+    // Enhanced VSOC TARGETING HUD
     if (obj.flagged && vsocActive) {
         ctx.strokeStyle = '#ef4444';
         ctx.lineWidth = 2;
         ctx.setLineDash([]);
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#ef4444';
         
-        // HUD Brackets
-        const pad = 10;
+        // Animated HUD Brackets
+        const pad = 12;
         const bx = obj.x - pad;
         const by = obj.y - pad;
         const bw = obj.width + pad*2;
         const bh = obj.height + pad*2;
+        const cornerLen = 15;
 
-        // Draw corners
         ctx.beginPath();
         // Top Left
-        ctx.moveTo(bx + 10, by); ctx.lineTo(bx, by); ctx.lineTo(bx, by + 10);
+        ctx.moveTo(bx + cornerLen, by); ctx.lineTo(bx, by); ctx.lineTo(bx, by + cornerLen);
         // Top Right
-        ctx.moveTo(bx + bw - 10, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + 10);
+        ctx.moveTo(bx + bw - cornerLen, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + cornerLen);
         // Bot Left
-        ctx.moveTo(bx + 10, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - 10);
+        ctx.moveTo(bx + cornerLen, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - cornerLen);
         // Bot Right
-        ctx.moveTo(bx + bw - 10, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - 10);
+        ctx.moveTo(bx + bw - cornerLen, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - cornerLen);
         ctx.stroke();
         
-        // Text Label
-        ctx.fillStyle = '#ef4444';
-        ctx.font = 'bold 12px Courier New';
-        ctx.fillText("⚠ VSOC REJECT", bx, by - 8);
+        // Center crosshair
+        ctx.beginPath();
+        const cx = bx + bw/2;
+        const cy = by + bh/2;
+        ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
+        ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
+        ctx.stroke();
         
-        // Data lines
+        // Threat label with background
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.9)';
+        ctx.fillRect(bx - 2, by - 25, 140, 18);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 11px "Courier New"';
+        ctx.fillText("⚠ THREAT DETECTED", bx + 3, by - 12);
+        
+        // Data panel
+        ctx.fillStyle = 'rgba(15, 23, 42, 0.95)';
+        ctx.fillRect(bx + bw + 5, by, 120, 50);
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(bx + bw + 5, by, 120, 50);
+        
+        ctx.fillStyle = '#fca5a5';
         ctx.font = '10px monospace';
-        ctx.fillText(`CONF: 99.8%`, bx + bw + 5, by + 10);
-        ctx.fillText(`SRC: CAM_01`, bx + bw + 5, by + 22);
+        ctx.fillText(`CONFIDENCE: 99.8%`, bx + bw + 10, by + 15);
+        ctx.fillText(`SOURCE: LIDAR`, bx + bw + 10, by + 28);
+        ctx.fillText(`ACTION: REJECT`, bx + bw + 10, by + 41);
         
-        ctx.globalAlpha = 0.5; // Dim the fake object
+        ctx.globalAlpha = 0.4;
     }
     ctx.restore();
   };
@@ -416,12 +577,12 @@ const LidarSpoofingSimulator: React.FC = () => {
   const calculateLidar = (ctx: CanvasRenderingContext2D, currentObjects: ObjectType[]) => {
     const sensorX = 120;
     const sensorY = 340;
-    const numRays = 40; 
-    const fov = Math.PI / 3;
+    const numRays = 50; 
+    const fov = Math.PI / 2.5;
     let minDist = 9999;
 
     ctx.save();
-    ctx.globalCompositeOperation = 'screen'; // Make lasers glowy
+    ctx.globalCompositeOperation = 'lighter';
     
     for (let i = 0; i < numRays; i++) {
       const angle = -fov/2 + (fov * i / numRays);
@@ -460,22 +621,40 @@ const LidarSpoofingSimulator: React.FC = () => {
       if (hit) {
           const isNeutralized = vsocActive && (hitObj?.flagged || hitObj?.type === 'noise');
           
-          ctx.strokeStyle = isNeutralized ? '#3b82f6' : '#10b981'; 
-          if (hitObj?.type === 'phantom' && !vsocActive) ctx.strokeStyle = '#ef4444'; 
+          if (isNeutralized) {
+            ctx.strokeStyle = '#3b82f6';
+            ctx.shadowColor = '#3b82f6';
+          } else if (hitObj?.type === 'phantom' && !vsocActive) {
+            ctx.strokeStyle = '#ef4444';
+            ctx.shadowColor = '#ef4444';
+          } else {
+            ctx.strokeStyle = '#10b981';
+            ctx.shadowColor = '#10b981';
+          }
 
-          ctx.lineWidth = 2;
-          ctx.globalAlpha = 0.6;
+          ctx.lineWidth = 1.5;
+          ctx.shadowBlur = 8;
+          ctx.globalAlpha = 0.7;
           ctx.stroke();
           
-          // Hit dot
+          // Enhanced hit point
           ctx.beginPath();
-          ctx.arc(hitX, hitY, 3, 0, Math.PI*2);
-          ctx.fillStyle = '#fff';
+          ctx.arc(hitX, hitY, 4, 0, Math.PI*2);
+          ctx.fillStyle = ctx.strokeStyle;
+          ctx.shadowBlur = 15;
+          ctx.fill();
+          
+          // Inner glow
+          ctx.beginPath();
+          ctx.arc(hitX, hitY, 2, 0, Math.PI*2);
+          ctx.fillStyle = '#ffffff';
+          ctx.shadowBlur = 5;
           ctx.fill();
       } else {
-          ctx.strokeStyle = '#334155'; 
-          ctx.lineWidth = 1;
-          ctx.globalAlpha = 0.1;
+          ctx.strokeStyle = 'rgba(71, 85, 105, 0.3)';
+          ctx.lineWidth = 0.5;
+          ctx.globalAlpha = 0.15;
+          ctx.shadowBlur = 0;
           ctx.stroke();
       }
     }
@@ -519,7 +698,6 @@ const LidarSpoofingSimulator: React.FC = () => {
        if (requestRef.current) cancelAnimationFrame(requestRef.current);
     }
   }, [isRunning, objects, attackType, simSpeed, lidarRange, vsocActive]); 
-  // ^ Added dependencies to ensure loop doesn't get stale
 
   const reset = () => {
     setIsRunning(false);
@@ -586,42 +764,82 @@ const LidarSpoofingSimulator: React.FC = () => {
         {/* Left Col: Controls */}
         <div className="space-y-6">
             
+            {/* Attack Info Panel */}
+            {showAttackInfo && (
+              <div className="bg-gradient-to-br from-slate-900 to-slate-800 p-5 rounded-xl border-2 border-blue-500/30 shadow-xl">
+                <div className="flex justify-between items-start mb-3">
+                  <h3 className="text-sm font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2">
+                    <Activity size={16} />
+                    {attackInfo[attackType].title}
+                  </h3>
+                  <button 
+                    onClick={() => setShowAttackInfo(false)}
+                    className="text-slate-500 hover:text-slate-300 text-xs"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="space-y-3 text-xs">
+                  <div>
+                    <p className="text-slate-300 leading-relaxed">{attackInfo[attackType].desc}</p>
+                  </div>
+                  {vsocActive && attackType !== 'none' && (
+                    <div className="mt-3 pt-3 border-t border-blue-500/30">
+                      <p className="text-blue-300 font-semibold mb-1 flex items-center gap-2">
+                        <Shield size={14} /> VSOC Mitigation:
+                      </p>
+                      <p className="text-slate-300 leading-relaxed">{attackInfo[attackType].vsocHelp}</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            {!showAttackInfo && (
+              <button
+                onClick={() => setShowAttackInfo(true)}
+                className="w-full bg-slate-900 hover:bg-slate-800 p-3 rounded-lg border border-slate-700 text-blue-400 text-sm font-semibold transition-all"
+              >
+                Show Attack Info
+              </button>
+            )}
+
             {/* Attack Panel */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg relative overflow-hidden">
                 <div className="absolute top-0 right-0 p-2 opacity-10">
                     <Zap size={100} />
                 </div>
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-red-400 relative z-10">
-                    <Zap size={20} /> Threat Injection
+                    <Zap size={20} /> Attack Vectors
                 </h3>
                 <div className="grid grid-cols-1 gap-2 relative z-10">
                     {[
-                        { id: 'none', label: 'No Attack', desc: 'Baseline Operations' },
-                        { id: 'phantom', label: 'Phantom Object', desc: 'Injects False Positive' },
-                        { id: 'hiding', label: 'Cloaking / Hiding', desc: 'Signal Absorbtion' },
-                        { id: 'relay', label: 'Relay / Spoof', desc: 'Position Offset' },
-                        { id: 'saturation', label: 'Saturation', desc: 'DDoS / Jamming' },
+                        { id: 'none', label: 'Secure Mode', desc: 'Normal Operations', icon: '✓' },
+                        { id: 'phantom', label: 'Phantom Injection', desc: 'False Positives', icon: '👻' },
+                        { id: 'hiding', label: 'Object Cloaking', desc: 'Signal Absorbtion', icon: '🚫' },
+                        { id: 'relay', label: 'Relay Attack', desc: 'Position Spoofing', icon: '📡' },
+                        { id: 'saturation', label: 'Signal Jamming', desc: 'Sensor Overload', icon: '⚡' },
                     ].map((attack) => (
                         <button
                             key={attack.id}
                             onClick={() => setAttackType(attack.id as any)}
-                            className={`text-left p-3 rounded-lg border transition-all flex flex-col ${
+                            className={`text-left p-3 rounded-lg border transition-all flex items-center gap-3 ${
                                 attackType === attack.id 
-                                ? 'bg-red-900/30 border-red-500 text-red-100' 
-                                : 'bg-slate-800/50 border-transparent hover:bg-slate-800 text-slate-400'
+                                ? 'bg-red-900/40 border-red-500 text-red-100 shadow-lg shadow-red-900/20' 
+                                : 'bg-slate-800/50 border-slate-700 hover:bg-slate-800 hover:border-slate-600 text-slate-300'
                             }`}
                         >
-                            <span className="font-bold text-sm flex justify-between">
-                                {attack.label}
-                                {attackType === attack.id && <Activity size={16} className="animate-pulse" />}
-                            </span>
-                            <span className="text-xs opacity-70">{attack.desc}</span>
+                            <span className="text-2xl">{attack.icon}</span>
+                            <div className="flex-1">
+                              <span className="font-bold text-sm block">{attack.label}</span>
+                              <span className="text-xs opacity-70">{attack.desc}</span>
+                            </div>
+                            {attackType === attack.id && <Activity size={16} className="animate-pulse text-red-400" />}
                         </button>
                     ))}
                 </div>
             </div>
 
-            {/* RESTORED: Sensor Settings */}
+            {/* Sensor Settings */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg">
                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-blue-400">
                     <Settings size={20} /> Sensor Calibration
@@ -701,16 +919,21 @@ const LidarSpoofingSimulator: React.FC = () => {
             <div className="relative bg-black rounded-xl overflow-hidden border-2 border-slate-700 shadow-2xl group">
                 
                 {/* HUD Overlay */}
-                <div className="absolute top-4 left-4 flex gap-4 pointer-events-none z-20">
-                    <div className="bg-black/60 backdrop-blur px-3 py-1 rounded border border-slate-600 text-xs text-slate-300 font-mono">
-                        LIDAR_FREQ: 10Hz
+                <div className="absolute top-4 left-4 right-4 flex justify-between items-start pointer-events-none z-20">
+                    <div className="flex gap-3">
+                      <div className="bg-black/70 backdrop-blur-sm px-3 py-1.5 rounded border border-slate-600 text-xs text-slate-300 font-mono">
+                          <span className="text-emerald-400">●</span> LIDAR: 10Hz
+                      </div>
+                      {vsocActive && (
+                          <div className="bg-blue-900/90 backdrop-blur-sm px-3 py-1.5 rounded border border-blue-400 text-xs text-blue-100 font-bold font-mono flex items-center gap-2 shadow-lg shadow-blue-500/30">
+                              <Server size={12} className="animate-pulse" />
+                              VSOC ACTIVE
+                          </div>
+                      )}
                     </div>
-                    {vsocActive && (
-                        <div className="bg-blue-900/80 backdrop-blur px-3 py-1 rounded border border-blue-500 text-xs text-blue-100 font-bold font-mono animate-pulse flex items-center gap-2">
-                            <Server size={12} />
-                            CLOUD_ANALYSIS: ONLINE
-                        </div>
-                    )}
+                    <div className="bg-black/70 backdrop-blur-sm px-3 py-1.5 rounded border border-slate-600 text-xs text-slate-300 font-mono">
+                        RANGE: {lidarRange}m
+                    </div>
                 </div>
 
                 <canvas
@@ -722,15 +945,21 @@ const LidarSpoofingSimulator: React.FC = () => {
                 
                 {/* Attack Warning Banner */}
                 {attackType !== 'none' && !vsocActive && (
-                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-red-600 text-white px-8 py-2 rounded-md font-bold animate-pulse flex items-center gap-2 shadow-[0_0_30px_rgba(220,38,38,0.8)] border border-red-400 z-20">
-                        <AlertTriangle size={20} />
-                        CRITICAL SENSOR FAILURE
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-gradient-to-r from-red-600 to-red-700 text-white px-8 py-3 rounded-lg font-bold animate-pulse flex items-center gap-3 shadow-2xl shadow-red-900/60 border-2 border-red-400 z-20">
+                        <AlertTriangle size={24} className="animate-bounce" />
+                        <div>
+                          <div className="text-sm uppercase tracking-wider">CRITICAL ALERT</div>
+                          <div className="text-xs opacity-90">Sensor Integrity Compromised</div>
+                        </div>
                     </div>
                 )}
                 {attackType !== 'none' && vsocActive && (
-                     <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-blue-600/90 text-white px-8 py-2 rounded-md font-bold flex items-center gap-2 shadow-[0_0_30px_rgba(37,99,235,0.5)] border border-blue-400 z-20">
-                        <Shield size={20} />
-                        THREAT MITIGATED
+                     <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-gradient-to-r from-blue-600 to-blue-700 text-white px-8 py-3 rounded-lg font-bold flex items-center gap-3 shadow-2xl shadow-blue-900/50 border-2 border-blue-300 z-20">
+                        <Shield size={24} />
+                        <div>
+                          <div className="text-sm uppercase tracking-wider">THREAT NEUTRALIZED</div>
+                          <div className="text-xs opacity-90">Multi-Sensor Validation Active</div>
+                        </div>
                     </div>
                 )}
             </div>
