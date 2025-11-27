@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap, Activity, Terminal, Lock, Server } from 'lucide-react';
+import { Play, Pause, RotateCcw, AlertTriangle, Shield, Zap, Activity, Terminal, Settings, Lock, Server } from 'lucide-react';
 
 // --- Types ---
 type ObjectType = {
@@ -29,13 +29,14 @@ const LidarSpoofingSimulator: React.FC = () => {
   const requestRef = useRef<number | null>(null);
   const scrollOffset = useRef<number>(0);
 
+  // Simulation Controls
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [vsocActive, setVsocActive] = useState<boolean>(false); 
   const [attackType, setAttackType] = useState<'none' | 'phantom' | 'hiding' | 'relay' | 'saturation'>('none');
   
-  // Simulation constants (Removed Setters since controls were removed from UI)
-  const simSpeed = 4;
-  const lidarRange = 350;
+  // Adjustable Parameters
+  const [simSpeed, setSimSpeed] = useState<number>(4);
+  const [lidarRange, setLidarRange] = useState<number>(400);
   
   // Metrics
   const [collisionRisk, setCollisionRisk] = useState<number>(0);
@@ -46,23 +47,21 @@ const LidarSpoofingSimulator: React.FC = () => {
 
   // Objects state
   const [objects, setObjects] = useState<ObjectType[]>([
-    { x: 600, y: 290, width: 60, height: 40, type: 'vehicle', id: 1 },
-    { x: 900, y: 280, width: 30, height: 50, type: 'pedestrian', id: 2 },
+    { x: 600, y: 280, width: 80, height: 50, type: 'vehicle', id: 1 },
+    { x: 900, y: 300, width: 30, height: 60, type: 'pedestrian', id: 2 },
   ]);
 
   // Helper: Add log
   const addLog = (message: string, type: 'info' | 'warning' | 'alert' | 'success') => {
     setLogs(prev => {
-      // Prevent duplicate log spam
       if (prev.length > 0 && prev[0].message === message) return prev;
-      
       const newLog = {
         id: Date.now(),
         timestamp: new Date().toLocaleTimeString([], { hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         message,
         type
       };
-      return [newLog, ...prev].slice(0, 8); 
+      return [newLog, ...prev].slice(0, 6); 
     });
   };
 
@@ -71,10 +70,10 @@ const LidarSpoofingSimulator: React.FC = () => {
       if (vsocActive && attackType !== 'none') {
           addLog(`VSOC: Analysis started for ${attackType} signature...`, "info");
           setTimeout(() => {
-              addLog(`VSOC: Mitigation protocols deployed against ${attackType}.`, "success");
+              addLog(`VSOC: Counter-measures deployed.`, "success");
           }, 800);
       } else if (attackType !== 'none') {
-          addLog(`WARNING: Unmitigated ${attackType} attack in progress!`, "alert");
+          addLog(`WARNING: System vulnerable to ${attackType} attack!`, "alert");
       }
   }, [attackType, vsocActive]);
 
@@ -88,128 +87,123 @@ const LidarSpoofingSimulator: React.FC = () => {
     const width = canvas.width;
     const height = canvas.height;
 
-    // 1. Update World State
-    scrollOffset.current = (scrollOffset.current + simSpeed) % 100; 
+    // 1. Update World State (Only if Running)
+    if (isRunning) {
+        scrollOffset.current = (scrollOffset.current + simSpeed) % 50; 
 
-    setObjects(prevObjects => {
-      // Move objects
-      // FIX: Explicitly type this array so TypeScript doesn't get confused by optional properties
-      let nextObjects: ObjectType[] = prevObjects.map(obj => ({
-        ...obj,
-        x: obj.x - simSpeed,
-        // Reset VSOC flags every frame for recalc
-        flagged: false, 
-        correctedX: undefined 
-      }));
+        setObjects(prevObjects => {
+        // Move objects (Shift Left to simulate car moving Right)
+        let nextObjects: ObjectType[] = prevObjects.map(obj => ({
+            ...obj,
+            x: obj.x - simSpeed,
+            flagged: false, 
+            correctedX: undefined 
+        }));
 
-      // Respawn logic
-      nextObjects.forEach(obj => {
-        if (obj.x + obj.width < -100) {
-          obj.x = width + 200 + Math.random() * 500;
-          obj.hidden = false; 
+        // Respawn logic (Loop objects back to the right)
+        nextObjects.forEach(obj => {
+            if (obj.x + obj.width < -200) {
+            obj.x = width + 100 + Math.random() * 600;
+            obj.hidden = false; 
+            }
+        });
+
+        // --- ATTACK SIMULATION LOGIC ---
+        
+        // 1. Saturation (Noise)
+        if (attackType === 'saturation') {
+            nextObjects = nextObjects.filter(o => o.type !== 'noise');
+            // Add dynamic noise based on speed
+            const noiseCount = 15;
+            for(let i=0; i<noiseCount; i++) {
+                nextObjects.push({
+                    x: Math.random() * width,
+                    y: 200 + Math.random() * 250,
+                    width: 3, height: 3, type: 'noise', id: `n-${Math.random()}`,
+                    flagged: vsocActive 
+                });
+            }
         }
-      });
 
-      // --- ATTACK SIMULATION LOGIC ---
-      
-      // 1. Saturation (Noise)
-      if (attackType === 'saturation') {
-        // Clear old noise
-        nextObjects = nextObjects.filter(o => o.type !== 'noise');
-        // Add heavy noise
-        const noiseCount = 20;
-        for(let i=0; i<noiseCount; i++) {
-             nextObjects.push({
-                x: 50 + Math.random() * 500,
-                y: 200 + Math.random() * 200,
-                width: 4, height: 4, type: 'noise', id: `n-${Math.random()}`,
-                flagged: vsocActive // If VSOC is on, we flag noise
-             });
+        // 2. Phantom Injection
+        if (attackType === 'phantom') {
+            const hasPhantom = nextObjects.some(o => o.type === 'phantom');
+            if (!hasPhantom) {
+                // Spawn a fake car right in front
+                nextObjects.push({
+                    x: 350, y: 280, width: 80, height: 50, type: 'phantom', id: 'phantom',
+                    flagged: vsocActive 
+                });
+            }
         }
-      }
 
-      // 2. Phantom Injection
-      if (attackType === 'phantom') {
-        const hasPhantom = nextObjects.some(o => o.type === 'phantom');
-        if (!hasPhantom) {
-            nextObjects.push({
-                x: 250, y: 300, width: 40, height: 40, type: 'phantom', id: 'phantom',
-                flagged: vsocActive // VSOC identifies this has no Camera/Radar correlation
+        // 3. Hiding Attack (Cloaking)
+        if (attackType === 'hiding') {
+            nextObjects = nextObjects.map(obj => {
+                const inKillZone = obj.x > 200 && obj.x < 500;
+                return {
+                    ...obj,
+                    hidden: obj.type !== 'phantom' && obj.type !== 'noise' && inKillZone
+                };
             });
         }
-      }
 
-      // 3. Hiding Attack (Cloaking)
-      if (attackType === 'hiding') {
-         nextObjects = nextObjects.map(obj => {
-             // If object is in the "Kill zone" (150-400), it disappears
-             const inKillZone = obj.x > 150 && obj.x < 400;
-             return {
-                 ...obj,
-                 hidden: obj.type !== 'phantom' && obj.type !== 'noise' && inKillZone
-                 // Note: VSOC can't make it reappear magically, but it can flag "Sensor Blindness"
-             };
-         });
-      }
+        // 4. Relay (Position Offset)
+        if (attackType === 'relay') {
+            nextObjects = nextObjects.map(obj => {
+                if (obj.type !== 'phantom' && obj.type !== 'noise') {
+                    return { ...obj, correctedX: obj.x }; // Store true X
+                }
+                return obj;
+            });
+        }
 
-      // 4. Relay (Position Offset)
-      if (attackType === 'relay') {
-          // No visual change to logic here, handled in draw
-          // But VSOC calculates the "True" position
-          nextObjects = nextObjects.map(obj => {
-              if (obj.type !== 'phantom' && obj.type !== 'noise') {
-                  return { ...obj, correctedX: obj.x }; // Store true X
-              }
-              return obj;
-          });
-      }
+        return nextObjects;
+        });
+    }
 
-      return nextObjects;
-    });
-
-    // 2. Drawing 
-    ctx.fillStyle = '#020617'; // Deepest Slate
+    // 2. Drawing (Always Draw, even if paused)
+    // Dark Sci-Fi Background
+    const bgGrad = ctx.createLinearGradient(0, 0, 0, height);
+    bgGrad.addColorStop(0, '#020617');
+    bgGrad.addColorStop(1, '#0f172a');
+    ctx.fillStyle = bgGrad;
     ctx.fillRect(0, 0, width, height);
 
-    drawGrid(ctx, width);
+    drawGrid(ctx, width, height);
     drawCar(ctx);
 
     // Draw Objects
     objects.forEach(obj => {
-        // --- VISUALIZING THE ATTACK & VSOC CORRECTION ---
-        
         let drawX = obj.x;
-        let drawY = obj.y;
+        const drawY = obj.y;
         let opacity = 1.0;
         
-        // Relay Attack Visuals
+        // Relay Attack Visuals (Shift the drawing X, but Logic X stays)
         if (attackType === 'relay' && obj.type !== 'phantom' && obj.type !== 'noise') {
-            // The LiDAR "Sees" it closer than it is
-            drawX = obj.x - 120; 
+            drawX = obj.x - 150; // Visual Spoofery
             
             // Draw Ghost/True position if VSOC is active
             if (vsocActive && obj.correctedX) {
                 drawCorrectionVector(ctx, drawX, obj.y, obj.correctedX, obj.y);
-                // Draw the "Real" ghost faint
+                // Draw "True" location ghost
                 ctx.save();
-                ctx.globalAlpha = 0.3;
-                ctx.fillStyle = '#f59e0b';
-                ctx.fillRect(obj.correctedX, obj.y, obj.width, obj.height);
+                ctx.globalAlpha = 0.4;
+                ctx.strokeStyle = '#f59e0b';
+                ctx.setLineDash([4, 4]);
+                ctx.strokeRect(obj.correctedX, obj.y, obj.width, obj.height);
                 ctx.restore();
             }
         }
 
-        // Saturation Visuals
-        if (obj.type === 'noise') {
-            opacity = vsocActive ? 0.2 : 1.0; // VSOC filters noise visually
-        }
+        if (obj.type === 'noise') opacity = vsocActive ? 0.1 : 0.8;
 
         ctx.globalAlpha = opacity;
         drawObject(ctx, {...obj, x: drawX, y: drawY});
         ctx.globalAlpha = 1.0;
     });
 
-    // LiDAR Rays & Points
+    // LiDAR Rays
     const metrics = calculateLidar(ctx, objects);
     
     // 3. Metrics Update
@@ -224,7 +218,7 @@ const LidarSpoofingSimulator: React.FC = () => {
 
   const drawCorrectionVector = (ctx: CanvasRenderingContext2D, fakeX: number, y: number, trueX: number, trueY: number) => {
       ctx.save();
-      ctx.strokeStyle = '#fbbf24'; // Amber
+      ctx.strokeStyle = '#fbbf24'; 
       ctx.lineWidth = 2;
       ctx.setLineDash([5, 5]);
       ctx.beginPath();
@@ -232,84 +226,121 @@ const LidarSpoofingSimulator: React.FC = () => {
       ctx.lineTo(trueX + 20, trueY + 20);
       ctx.stroke();
       
-      // Label
+      // Box around the correction
+      ctx.fillStyle = 'rgba(251, 191, 36, 0.2)';
+      ctx.fillRect(fakeX, y - 20, (trueX - fakeX), 20);
+      
       ctx.fillStyle = '#fbbf24';
       ctx.font = '10px monospace';
-      ctx.fillText("VSOC CORRECTION", (fakeX + trueX)/2 - 40, y - 10);
+      ctx.fillText("GPS RECONCILIATION", (fakeX + trueX)/2 - 50, y - 8);
       ctx.restore();
   }
 
-  const drawGrid = (ctx: CanvasRenderingContext2D, w: number) => {
-    // Cyberpunk Grid Floor
-    const roadTop = 250;
-    const roadBot = 450;
+  const drawGrid = (ctx: CanvasRenderingContext2D, w: number, h: number) => {
+    const horizonY = 200;
     
-    // Gradient
-    const grad = ctx.createLinearGradient(0, roadTop, 0, roadBot);
+    // Road Surface
+    const grad = ctx.createLinearGradient(0, horizonY, 0, h);
     grad.addColorStop(0, '#0f172a');
     grad.addColorStop(1, '#1e293b');
     ctx.fillStyle = grad;
-    ctx.fillRect(0, roadTop, w, roadBot - roadTop);
+    ctx.fillRect(0, horizonY, w, h - horizonY);
 
-    // Perspective Lines
-    ctx.strokeStyle = vsocActive ? '#0ea5e9' : '#334155'; // Blue lines if VSOC is active
-    ctx.lineWidth = 1;
+    // Grid Lines (Perspective)
+    ctx.save();
     ctx.beginPath();
-    // Horizontal
-    ctx.moveTo(0, 250); ctx.lineTo(w, 250);
-    ctx.moveTo(0, 450); ctx.lineTo(w, 450);
-    // Vertical perspective
-    for(let i=0; i<w; i+=100) {
-        ctx.moveTo(i, 250); ctx.lineTo(i - (w/2 - i)*2, 450);
+    ctx.strokeStyle = vsocActive ? 'rgba(14, 165, 233, 0.3)' : 'rgba(148, 163, 184, 0.1)';
+    ctx.lineWidth = 1;
+
+    const offset = scrollOffset.current;
+    
+    // Vertical perspective lines
+    for(let i = -w; i < w * 2; i+=100) {
+        ctx.moveTo(i, horizonY);
+        // Fan out towards bottom
+        ctx.lineTo(i - (i - w/2) * 1.5, h); 
+    }
+    
+    ctx.stroke();
+    
+    // Moving Horizontal Lines (Floor effect)
+    ctx.beginPath();
+    // Only draw a few lines that "move" down
+    for(let i=0; i<10; i++) {
+        const yPos = horizonY + (i * 30 + offset) % (h-horizonY);
+        if(yPos > horizonY) {
+            ctx.moveTo(0, yPos);
+            ctx.lineTo(w, yPos);
+        }
     }
     ctx.stroke();
-
-    // Moving Lane Markers
-    ctx.strokeStyle = '#f59e0b'; 
-    ctx.lineWidth = 4;
-    ctx.setLineDash([40, 60]);
-    ctx.lineDashOffset = -scrollOffset.current * 4; 
-    ctx.beginPath();
-    ctx.moveTo(0, 350);
-    ctx.lineTo(w, 350);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.restore();
   };
 
   const drawCar = (ctx: CanvasRenderingContext2D) => {
-    const x = 100;
-    const y = 320;
+    const x = 120;
+    const y = 340;
     
-    // Shield Bubble (VSOC Active)
+    // VSOC Shield Bubble
     if (vsocActive) {
         ctx.save();
         ctx.beginPath();
-        ctx.arc(x, y, 70, 0, Math.PI*2);
-        ctx.fillStyle = 'rgba(14, 165, 233, 0.15)';
+        ctx.ellipse(x + 20, y, 90, 40, 0, 0, Math.PI*2);
+        ctx.fillStyle = 'rgba(14, 165, 233, 0.1)';
         ctx.strokeStyle = '#0ea5e9';
-        ctx.lineWidth = 2;
+        ctx.lineWidth = 1;
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = '#0ea5e9';
         ctx.stroke();
         ctx.fill();
         ctx.restore();
     }
 
-    // Body
-    ctx.fillStyle = '#3b82f6';
+    // Headlights
+    ctx.save();
     ctx.beginPath();
-    ctx.roundRect(x - 40, y - 20, 80, 40, 8);
+    ctx.moveTo(x + 50, y - 15);
+    ctx.lineTo(x + 300, y - 60);
+    ctx.lineTo(x + 300, y + 60);
+    ctx.lineTo(x + 50, y + 15);
+    ctx.fillStyle = 'rgba(253, 224, 71, 0.1)'; // Yellow faint light
+    ctx.fill();
+    ctx.restore();
+
+    // Car Body (Futuristic Shape)
+    ctx.fillStyle = '#3b82f6'; // Blue
+    ctx.beginPath();
+    // Hood
+    ctx.moveTo(x + 60, y);
+    ctx.lineTo(x, y - 25);
+    ctx.lineTo(x - 60, y - 25);
+    ctx.lineTo(x - 60, y + 25);
+    ctx.lineTo(x, y + 25);
+    ctx.closePath();
     ctx.fill();
     
-    // Sensor Top
-    ctx.fillStyle = '#172554';
-    ctx.fillRect(x - 15, y - 25, 30, 20);
+    // Roof/Cockpit
+    ctx.fillStyle = '#1e293b'; // Dark Glass
+    ctx.beginPath();
+    ctx.moveTo(x + 10, y);
+    ctx.lineTo(x - 20, y - 15);
+    ctx.lineTo(x - 50, y - 15);
+    ctx.lineTo(x - 50, y + 15);
+    ctx.lineTo(x - 20, y + 15);
+    ctx.closePath();
+    ctx.fill();
 
-    // Spinning Lidar
-    const time = Date.now() / 80;
+    // Sensor Array (Spinning)
+    const time = Date.now() / 60;
     ctx.save();
-    ctx.translate(x, y - 25);
+    ctx.translate(x - 10, y);
     ctx.rotate(time);
-    ctx.fillStyle = attackType === 'none' || vsocActive ? '#10b981' : '#ef4444'; // Green if safe, Red if attack & no vsoc
-    ctx.fillRect(-12, -3, 24, 6);
+    ctx.fillStyle = attackType === 'none' || vsocActive ? '#10b981' : '#ef4444'; 
+    ctx.fillRect(-12, -4, 24, 8);
+    // Glow
+    ctx.shadowBlur = 15;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.fill();
     ctx.restore();
   };
 
@@ -318,50 +349,79 @@ const LidarSpoofingSimulator: React.FC = () => {
 
     ctx.save();
     
-    let color = '#a855f7'; // Default purple
+    let color = '#a855f7'; 
     if (obj.type === 'pedestrian') color = '#22c55e';
     if (obj.type === 'phantom') color = '#ef4444';
-    if (obj.type === 'noise') color = '#94a3b8';
+    if (obj.type === 'noise') color = '#cbd5e1';
 
-    // VSOC Flagging Visuals
-    if (obj.flagged && vsocActive) {
-        ctx.strokeStyle = '#ef4444';
-        ctx.lineWidth = 2;
-        ctx.strokeRect(obj.x - 5, obj.y - 5, obj.width + 10, obj.height + 10);
-        
-        ctx.fillStyle = '#ef4444';
-        ctx.font = 'bold 10px sans-serif';
-        ctx.fillText("VSOC REJECT", obj.x, obj.y - 10);
-        
-        // Dim the actual object to show it's ignored
-        ctx.globalAlpha = 0.3;
-    }
+    // Shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(obj.x + obj.width/2, obj.y + obj.height - 5, obj.width/2, 8, 0, 0, Math.PI*2);
+    ctx.fill();
 
+    // Main Body
     if (obj.type === 'noise') {
         ctx.fillStyle = color;
         ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
     } else {
+        // 3D-ish Block
         ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.roundRect(obj.x, obj.y, obj.width, obj.height, 4);
-        ctx.fill();
+        ctx.fillRect(obj.x, obj.y, obj.width, obj.height);
+        // Side/Top shading
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.fillRect(obj.x, obj.y, obj.width, 5); // Top highlight
+    }
+
+    // --- VSOC TARGETING HUD ---
+    if (obj.flagged && vsocActive) {
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
         
-        // Tech markings
-        ctx.strokeStyle = 'rgba(255,255,255,0.5)';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(obj.x, obj.y, obj.width, obj.height);
+        // HUD Brackets
+        const pad = 10;
+        const bx = obj.x - pad;
+        const by = obj.y - pad;
+        const bw = obj.width + pad*2;
+        const bh = obj.height + pad*2;
+
+        // Draw corners
+        ctx.beginPath();
+        // Top Left
+        ctx.moveTo(bx + 10, by); ctx.lineTo(bx, by); ctx.lineTo(bx, by + 10);
+        // Top Right
+        ctx.moveTo(bx + bw - 10, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + 10);
+        // Bot Left
+        ctx.moveTo(bx + 10, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - 10);
+        // Bot Right
+        ctx.moveTo(bx + bw - 10, by + bh); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw, by + bh - 10);
+        ctx.stroke();
+        
+        // Text Label
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 12px Courier New';
+        ctx.fillText("⚠ VSOC REJECT", bx, by - 8);
+        
+        // Data lines
+        ctx.font = '10px monospace';
+        ctx.fillText(`CONF: 99.8%`, bx + bw + 5, by + 10);
+        ctx.fillText(`SRC: CAM_01`, bx + bw + 5, by + 22);
+        
+        ctx.globalAlpha = 0.5; // Dim the fake object
     }
     ctx.restore();
   };
 
   const calculateLidar = (ctx: CanvasRenderingContext2D, currentObjects: ObjectType[]) => {
-    const sensorX = 100;
-    const sensorY = 295;
-    const numRays = 60; 
-    const fov = Math.PI / 2.5;
+    const sensorX = 120;
+    const sensorY = 340;
+    const numRays = 40; 
+    const fov = Math.PI / 3;
     let minDist = 9999;
 
     ctx.save();
+    ctx.globalCompositeOperation = 'screen'; // Make lasers glowy
     
     for (let i = 0; i < numRays; i++) {
       const angle = -fov/2 + (fov * i / numRays);
@@ -373,28 +433,20 @@ const LidarSpoofingSimulator: React.FC = () => {
       let hitY = endY;
       let hitObj: ObjectType | null = null;
 
-      // Raycast against objects
+      // Raycast
       for (const obj of currentObjects) {
         if (obj.hidden) continue;
         
-        // Relay Attack: Logic sees the visual position (drawX handled in loop, but here we use obj.x modified)
-        // For simulation simplicity, we Raycast against the object's logic X. 
-        // In Relay attack, we modified the visual X, but the logical X remains.
-        // To properly simulate Relay, we assume the object moved in the `animate` loop.
-        
-        const inYRange = (endY > obj.y && endY < obj.y + obj.height);
-        
-        // Simple Hit Box
-        // Relay shift logic for raycast:
+        // Relay Logic check
         let checkX = obj.x;
-        if (attackType === 'relay' && !['phantom','noise'].includes(obj.type)) checkX -= 120;
+        if (attackType === 'relay' && !['phantom','noise'].includes(obj.type)) checkX -= 150;
 
+        const inYRange = (endY > obj.y && endY < obj.y + obj.height);
         if (inYRange && endX > checkX && endX < checkX + obj.width + 20) {
            hit = true;
            hitX = Math.max(sensorX, checkX); 
            hitY = sensorY + Math.tan(angle) * (hitX - sensorX);
            hitObj = obj;
-           
            const d = Math.sqrt(Math.pow(hitX - sensorX, 2) + Math.pow(hitY - sensorY, 2));
            if (d < minDist) minDist = d;
            break; 
@@ -406,16 +458,23 @@ const LidarSpoofingSimulator: React.FC = () => {
       ctx.lineTo(hitX, hitY);
       
       if (hit) {
-          // If VSOC is active and flagged this object, we don't treat it as a valid Lidar hit (Blue instead of Green)
           const isNeutralized = vsocActive && (hitObj?.flagged || hitObj?.type === 'noise');
           
           ctx.strokeStyle = isNeutralized ? '#3b82f6' : '#10b981'; 
-          if (hitObj?.type === 'phantom' && !vsocActive) ctx.strokeStyle = '#ef4444'; // Red for danger
+          if (hitObj?.type === 'phantom' && !vsocActive) ctx.strokeStyle = '#ef4444'; 
 
-          ctx.globalAlpha = isNeutralized ? 0.3 : 0.8;
+          ctx.lineWidth = 2;
+          ctx.globalAlpha = 0.6;
           ctx.stroke();
+          
+          // Hit dot
+          ctx.beginPath();
+          ctx.arc(hitX, hitY, 3, 0, Math.PI*2);
+          ctx.fillStyle = '#fff';
+          ctx.fill();
       } else {
           ctx.strokeStyle = '#334155'; 
+          ctx.lineWidth = 1;
           ctx.globalAlpha = 0.1;
           ctx.stroke();
       }
@@ -426,65 +485,47 @@ const LidarSpoofingSimulator: React.FC = () => {
   };
 
   const calculateRiskMetrics = (dist: number | null) => {
-      let risk = 5; // Base risk
+      let risk = 5; 
       let integrity = 100;
 
-      // --- RISK CALCULATOR ---
-
+      // Attack Metrics logic
       if (attackType === 'none') {
           if (dist && dist < 120) risk = 30;
-          if (dist && dist < 60) risk = 60;
-      } 
-      else {
-          // Under Attack
+      } else {
           integrity = 40; 
-
-          if (attackType === 'phantom') {
-             // Fake braking event
-             risk = 80; 
-             if (dist && dist < 100) risk = 95;
-          }
-          if (attackType === 'saturation') {
-             risk = 60;
-          }
-          if (attackType === 'relay') {
-             risk = 75; // Collision likely due to offset
-          }
-          if (attackType === 'hiding') {
-              risk = 90; // Critical danger (invisible object)
-          }
+          if (attackType === 'phantom') risk = 80;
+          if (attackType === 'saturation') risk = 60;
+          if (attackType === 'relay') risk = 75; 
+          if (attackType === 'hiding') risk = 90;
       }
 
-      // --- VSOC MITIGATION FACTOR ---
+      // VSOC Mitigation
       if (vsocActive) {
-          integrity = 95; // VSOC restores confidence
-          
-          if (attackType === 'phantom') {
-              risk = 10; // We identified it's fake, risk drops
-          }
-          if (attackType === 'saturation') {
-              risk = 20;
-          }
-          if (attackType === 'relay') {
-              risk = 25; // We know true location, risk managed
-          }
-          if (attackType === 'hiding') {
-              // VSOC detects signal anomaly, slows car down proactively
-              risk = 40; 
-              addLog("VSOC: Anomaly detected (Signal Drop). Speed reduced.", "warning");
-          }
+          integrity = 98; 
+          if (attackType === 'phantom') risk = 10;
+          if (attackType === 'saturation') risk = 20;
+          if (attackType === 'relay') risk = 25; 
+          if (attackType === 'hiding') risk = 40; 
       }
 
-      // Smooth interpolation
       setCollisionRisk(prev => prev + (risk - prev) * 0.1);
       setIntegrityScore(prev => prev + (integrity - prev) * 0.1);
   };
 
+  // Lifecycle for Animation
+  useEffect(() => {
+    requestRef.current = requestAnimationFrame(animate);
+    return () => {
+       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    }
+  }, [isRunning, objects, attackType, simSpeed, lidarRange, vsocActive]); 
+  // ^ Added dependencies to ensure loop doesn't get stale
+
   const reset = () => {
     setIsRunning(false);
     setObjects([
-        { x: 600, y: 290, width: 60, height: 40, type: 'vehicle', id: 1 },
-        { x: 900, y: 280, width: 30, height: 50, type: 'pedestrian', id: 2 },
+        { x: 600, y: 280, width: 80, height: 50, type: 'vehicle', id: 1 },
+        { x: 900, y: 300, width: 30, height: 60, type: 'pedestrian', id: 2 },
     ]);
     setAttackType('none');
     setLogs([]);
@@ -580,21 +621,54 @@ const LidarSpoofingSimulator: React.FC = () => {
                 </div>
             </div>
 
-            {/* Metrics Panel */}
+            {/* RESTORED: Sensor Settings */}
             <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg">
                  <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-blue-400">
-                    <Activity size={20} /> Sensor Health
+                    <Settings size={20} /> Sensor Calibration
+                </h3>
+                <div className="space-y-4">
+                    <div>
+                        <div className="flex justify-between text-xs mb-1 text-slate-400">
+                            <span>Vehicle Speed</span>
+                            <span>{simSpeed} m/s</span>
+                        </div>
+                        <input 
+                            type="range" min="0" max="10" step="1" 
+                            value={simSpeed} 
+                            onChange={(e) => setSimSpeed(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                    </div>
+                    <div>
+                        <div className="flex justify-between text-xs mb-1 text-slate-400">
+                            <span>LiDAR Range</span>
+                            <span>{lidarRange} m</span>
+                        </div>
+                        <input 
+                            type="range" min="100" max="600" step="10" 
+                            value={lidarRange} 
+                            onChange={(e) => setLidarRange(parseInt(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                        />
+                    </div>
+                </div>
+            </div>
+
+            {/* Metrics */}
+            <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 shadow-lg">
+                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-white">
+                    <Activity size={20} /> Integrity Monitor
                 </h3>
                 <div className="space-y-4">
                      {/* Risk Gauge */}
                      <div>
                         <div className="flex justify-between text-sm font-medium mb-1">
-                            <span className="text-slate-400">Risk Level</span>
+                            <span className="text-slate-400">Collision Risk</span>
                             <span className={`${collisionRisk > 50 ? 'text-red-400' : 'text-emerald-400'}`}>
                                 {collisionRisk.toFixed(0)}%
                             </span>
                         </div>
-                        <div className="h-3 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                        <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
                             <div 
                                 className={`h-full transition-all duration-500 ${collisionRisk > 50 ? 'bg-red-500' : 'bg-emerald-500'}`}
                                 style={{ width: `${collisionRisk}%` }} 
@@ -604,12 +678,12 @@ const LidarSpoofingSimulator: React.FC = () => {
                      {/* Integrity Gauge */}
                      <div>
                         <div className="flex justify-between text-sm font-medium mb-1">
-                            <span className="text-slate-400">Data Integrity (VSOC)</span>
+                            <span className="text-slate-400">VSOC Trust Score</span>
                             <span className={`${integrityScore < 80 ? 'text-amber-400' : 'text-blue-400'}`}>
                                 {integrityScore.toFixed(0)}%
                             </span>
                         </div>
-                        <div className="h-3 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
+                        <div className="h-2 bg-slate-800 rounded-full overflow-hidden border border-slate-700">
                             <div 
                                 className={`h-full transition-all duration-500 ${integrityScore < 80 ? 'bg-amber-500' : 'bg-blue-500'}`}
                                 style={{ width: `${integrityScore}%` }} 
